@@ -1,214 +1,259 @@
-from Backend.config import Telegram
-from Backend.helper.imdb import get_detail, get_season, search_title
-from Backend.helper.mediainfo import get_media_quality
+import asyncio
 import PTN
-from themoviedb import aioTMDb
-
+from Backend.helper.imdb import get_detail, get_season, search_title
 from Backend.helper.pyro import extract_tmdb_id, normalize_languages
+from themoviedb import aioTMDb
+from Backend.config import Telegram
+import Backend
+from Backend.logger import LOGGER
+import traceback
+
+
+DELAY = 2
 
 tmdb = aioTMDb(key=Telegram.TMDB_API, language="en-US", region="US")
 
-async def metadata(filename, media):
+async def metadata(filename: str, media) -> dict:
+    try:
+        parsed = PTN.parse(filename)
+        if 'excess' in parsed and any('combined' in item.lower() for item in parsed['excess']):
+            LOGGER.info(f"Skipping {filename} due to 'combined' in excess")
+            return None
 
-    # Parse the filename using PTN
-    data = PTN.parse(filename)
-    title = data.get('title')
-    season = data.get('season')
-    episode = data.get('episode')
-    year = data.get('year')
-    quality = data.get('resolution')
-    if quality is None:
-        quality = await get_media_quality(media)
+        title = parsed.get('title')
+        season = parsed.get('season')
+        episode = parsed.get('episode')
+        year = parsed.get('year')
+        quality = parsed.get('resolution')
+        languages = normalize_languages(parsed.get('language'))
+        rip = parsed.get('quality')
 
-    languages = normalize_languages(data.get('language'))
-    rip = data.get('quality')
+        if isinstance(season, list) or isinstance(episode, list):
+            LOGGER.warning(f"Invalid format: Season/Episode is list — {filename}, parsed: {parsed}")
+            return None
 
-    print("Current USE_DEFAULT_ID:", Telegram.USE_DEFAULT_ID)
-    
-    if Telegram.USE_DEFAULT_ID is None:
-        default_id = extract_tmdb_id(filename)
-        print("Extracted default_id:", default_id)
-    else:
-        default_id = extract_tmdb_id(Telegram.USE_DEFAULT_ID)
-        print("Using USE_DEFAULT_ID:", default_id)
+        if season and not episode:
+            LOGGER.warning(f"Missing episode for season: {filename}, parsed: {parsed}")
+            return None
 
-    if title:
-        if season and episode:
-            try:
-            # Fetch TV show details
-                if default_id is None:
-                    if Telegram.USE_TMDB:
-                        tv_shows = await tmdb.search().tv(query=title)
-                        tv_show = tv_shows[0].id  # Get first result
-                        tv_show_details = await tmdb.tv(tv_show).details()
-                    
-                    # Try fetching episode details, fallback to default
-                        try:
-                            episode_details = await tmdb.episode(tv_show, season, episode).details()
-                            episode_title = episode_details.name or f"S{season}E{episode}"
-                            episode_backdrop = (
-                               f"https://image.tmdb.org/t/p/original{episode_details.still_path}"
-                                if episode_details.still_path else ''
-                                 )
-                        except Exception:
-                            print(f"Episode S{season}E{episode} not found. Using default values.")
-                            episode_title = f"S{season}E{episode}"
-                            episode_backdrop = ''
-                    else:
-                        tv_shows = await search_title(query=title, type="tvSeries")
-                        tvshow = tv_shows['id']
-                        tv_show_details = await get_detail(imdb_id=tvshow)
-                    
-                    # Try fetching episode details, fallback to default
-                        try:
-                            episode_details = await get_season(imdb_id=tvshow, season_id=season, episode_id=episode)
-                            if episode_details != None:
-                                episode_title = episode_details.get('title', f"S{season}E{episode}")
-                                episode_backdrop = episode_details.get('image', '')
-                            else:
-                                episode_title = f"S{season}E{episode}"
-                                episode_backdrop = ''
-                        except Exception:
-                            print(f"Episode S{season}E{episode} not found in IMDb. Using default values.")
-                            episode_title = f"S{season}E{episode}"
-                            episode_backdrop = ''
-                else:
-                    if default_id.startswith("tt"):
-                        tv_show_details = await get_detail(imdb_id=default_id)
-                    
-                    # Try fetching episode details, fallback to default
-                        try:
-                            episode_details = await get_season(imdb_id=default_id, season_id=season, episode_id=episode)
-                            episode_title = episode_details.get('title', f"S{season}E{episode}")
-                            episode_backdrop = episode_details.get('image', '')
-                        except Exception:
-                            print(f"Episode S{season}E{episode} not found in IMDb. Using default values.")
-                            episode_title = f"S{season}E{episode}"
-                            episode_backdrop = ''
-                    else:
-                        tv_show_details = await tmdb.tv(int(default_id)).details()
-                    
-                    # Try fetching episode details, fallback to default
-                        try:
-                            episode_details = await tmdb.episode(int(default_id), season, episode).details()
-                            episode_title = episode_details.name
-                            episode_backdrop = f"https://image.tmdb.org/t/p/original{episode_details.still_path}" if episode_details.still_path else ''
-                        except Exception:
-                            print(f"Episode S{season}E{episode} not found. Using default values.")
-                            episode_title = f"S{season}E{episode}"
-                            episode_backdrop = ''
-
-            # Extract relevant TV show metadata
-                tmdb_id = tv_show_details.id if Telegram.USE_TMDB else tv_show_details['id'].replace("tt", "")
-                title = tv_show_details.name if Telegram.USE_TMDB else tv_show_details['title']
-                year = tv_show_details.first_air_date.year if Telegram.USE_TMDB else tv_show_details['releaseDetailed']['year']
-                rate = tv_show_details.vote_average if Telegram.USE_TMDB else tv_show_details['rating']['star']
-                description = tv_show_details.overview if Telegram.USE_TMDB else tv_show_details['plot']
-                total_seasons = tv_show_details.number_of_seasons if Telegram.USE_TMDB else len(tv_show_details['all_seasons'])
-                total_episodes = tv_show_details.number_of_episodes if Telegram.USE_TMDB else ' '.join(str(len(season['episodes']) * total_seasons) for season in tv_show_details['seasons'])
-                poster = f"https://image.tmdb.org/t/p/w500{tv_show_details.poster_path}" if Telegram.USE_TMDB else tv_show_details['image']
-
-
-
-                if Telegram.USE_TMDB:
-                    backdrop = f"https://image.tmdb.org/t/p/original{tv_show_details.backdrop_path}"
-                    status = tv_show_details.status
-                else:
-                    tv_shows = await tmdb.search().tv(query=title)
-                    tv_show = tv_shows[0].id  # Get first result
-                    tv_show_details_force = await tmdb.tv(tv_show).details()
-                    backdrop = f"https://image.tmdb.org/t/p/original{tv_show_details_force.backdrop_path}"
-                    status = tv_show_details_force.status
-                
-            
-                genres = [genre.name for genre in tv_show_details.genres] if Telegram.USE_TMDB else tv_show_details['genre']
-                media_type = "tv"
-
-            # Return the TV show metadata
-                return {
-                "tmdb_id": tmdb_id,
-                "title": title,
-                "year": year,
-                "rate": rate or 0,
-                "description": description,
-                "total_seasons": total_seasons,
-                "total_episodes": total_episodes,
-                "poster": poster or '',
-                "backdrop": backdrop or '',
-                "status": status,
-                "genres": genres,
-                "media_type": media_type,
-                "season_number": season,
-                "episode_number": episode,
-                "episode_title": episode_title,
-                "episode_backdrop": episode_backdrop,
-                "quality": quality,
-                "languages": languages or ['hi'],
-                "rip": rip or 'Blu-ray'
-                }
-
-            except Exception as e:
-                print(f"Error fetching TV show details: {e}")
-                return None  # Or handle error as needed
-        else:
-            return await fetch_movie_metadata(title, year, quality, default_id, languages, rip)
-
-async def fetch_movie_metadata(title, year=None, quality=None, default_id=None, languages=None, rip=None):
-    query = f"{title} {year}" if year else title
-
-    if title:
         try:
-            if default_id is None:
-                if Telegram.USE_TMDB:
-                    movies = await tmdb.search().movies(query=title, year=year if year else None)
-                    movie_id = movies[0].id
-                    movies_details = await tmdb.movie(int(movie_id)).details()
-                else:
-                    movies = await search_title(query=query, type="movie")
-                    movie_id = movies['id']
-                    movies_details = await get_detail(imdb_id=movie_id)
-            else:
-                if default_id.startswith("tt"):
-                    movies_details = await get_detail(imdb_id=default_id)
-                else:
-                    movies_details = await tmdb.movie(int(default_id)).details()
-
-            # Extract relevant movie metadata
-            tmdb_id = movies_details.id if Telegram.USE_TMDB else movies_details['id'].replace("tt", "")
-            title = movies_details.title if Telegram.USE_TMDB else movies_details['title']
-            year = movies_details.release_date.year if Telegram.USE_TMDB else movies_details['releaseDetailed']['year']
-            rate = movies_details.vote_average if Telegram.USE_TMDB else movies_details['rating']['star']
-            description = movies_details.overview if Telegram.USE_TMDB else movies_details['plot']
-            poster = f"https://image.tmdb.org/t/p/w500{movies_details.poster_path}" if Telegram.USE_TMDB else movies_details['image']
-            backdrop = f"https://image.tmdb.org/t/p/original{movies_details.backdrop_path}" if Telegram.USE_TMDB else None
-            
-            if not backdrop:
-                movies = await tmdb.search().movies(query=title, year=year)
-                movie = movies[0].id
-                movies_details_force = await tmdb.movie(movie).details()
-                backdrop = f"https://image.tmdb.org/t/p/original{movies_details_force.backdrop_path}"
-
-            runtime = movies_details.runtime if Telegram.USE_TMDB else movies_details['runtimeSeconds'] // 60
-            media_type = "movie"
-            genres = [genre.name for genre in movies_details.genres] if Telegram.USE_TMDB else movies_details['genre']
-
-            # Return the movie metadata
-            return {
-                "tmdb_id": tmdb_id,
-                "title": title,
-                "year": year,
-                "rate": rate or 0,
-                "description": description,
-                "poster": poster or '',
-                "backdrop": backdrop or '',
-                "media_type": media_type,
-                "genres": genres,
-                "runtime": runtime or 0,
-                "quality": quality,
-                "languages": languages or ['hi'],
-                "rip": rip or 'Blu-ray'
-            }
-
+            default_id = extract_tmdb_id(Backend.USE_DEFAULT_ID)
         except Exception as e:
-            print(f"Error fetching movie details: {e}")
-            return None  # Or handle error as needed
+            LOGGER.debug(f"Failed to extract default TMDB ID from USE_DEFAULT_ID: {e}")
+            default_id = None
+
+        if not default_id:
+            try:
+                default_id = extract_tmdb_id(filename)
+            except Exception as e:
+                LOGGER.debug(f"Failed to extract TMDB ID from filename {filename}: {e}")
+                default_id = None
+
+        if title:
+            if season and episode:
+                LOGGER.info(f"Fetching TV metadata for: {title} S{season}E{episode}")
+                return await fetch_tv_metadata(title, season, episode, year, quality, default_id, languages, rip)
+            else:
+                LOGGER.info(f"Fetching movie metadata for: {title} ({year})")
+                return await fetch_movie_metadata(title, year, quality, default_id, languages, rip)
+
+        LOGGER.info(f"No title parsed from: {filename} (parsed: {parsed})")
+        return None
+
+    except Exception as e:
+        LOGGER.error(f"Unhandled error while parsing metadata for {filename}: {e}")
+        return None
+
+
+
+
+async def fetch_tv_metadata(title: str, season: int, episode: int, year=None, quality=None, default_id=None, languages=None, rip=None) -> dict:
+    try:
+        tv_details, ep_details, use_tmdb = None, None, False
+        imdb_id = default_id if default_id and default_id.startswith("tt") else None
+
+        if not imdb_id:
+            result = await search_title(query=f"{title} {year}" if year else title, type="tvSeries")
+            imdb_id = result['id'] if result else None
+
+        if imdb_id:
+            try:
+                await asyncio.sleep(DELAY)
+                tv_details = await get_detail(imdb_id=imdb_id)
+                await asyncio.sleep(DELAY)
+                ep_details = await get_season(imdb_id=imdb_id, season_id=season, episode_id=episode)
+            except Exception as e:
+                LOGGER.warning(f"IMDb TV fetch failed for ID {imdb_id}: {e}")
+                tv_details, ep_details = None, None
+
+        if not tv_details or not ep_details:
+            use_tmdb = True
+            await asyncio.sleep(DELAY)
+            tmdb_results = await tmdb.search().tv(query=title)
+            if not tmdb_results:
+                LOGGER.warning(f"No TMDb results found for title '{title}'")
+                return None
+            tv_id = tmdb_results[0].id
+            LOGGER.debug(f"TMDb ID found: {tv_id}")
+            tv_details = await tmdb.tv(tv_id).details()
+            ep_details = await tmdb.episode(tv_id, season, episode).details()
+
+        if use_tmdb:
+            tmdb_id = tv_details.id
+            show_title = tv_details.name
+            show_year = tv_details.first_air_date.year if tv_details.first_air_date else 0
+            rate = tv_details.vote_average or 0
+            description = tv_details.overview or ''
+            total_seasons = tv_details.number_of_seasons or 0
+            total_episodes = tv_details.number_of_episodes or 0
+            poster = f"https://image.tmdb.org/t/p/w500{tv_details.poster_path}" if tv_details.poster_path else ''
+            backdrop = f"https://image.tmdb.org/t/p/original{tv_details.backdrop_path}" if tv_details.backdrop_path else ''
+            status = tv_details.status or 'Unknown'
+            genres = [genre.name for genre in tv_details.genres] if tv_details.genres else []
+            ep_title = ep_details.name if ep_details and hasattr(ep_details, 'name') else f"S{season}E{episode}"
+            ep_backdrop = f"https://image.tmdb.org/t/p/original{ep_details.still_path}" if ep_details and ep_details.still_path else ''
+        else:
+            tmdb_id = tv_details['id'].replace("tt", "")
+            show_title = tv_details.get('title', title)
+            show_year = tv_details.get('releaseDetailed', {}).get('year', 0)
+            rate = tv_details.get('rating', {}).get('star', 0)
+            description = tv_details.get('plot', '')
+            total_seasons = len(tv_details.get('all_seasons', []))
+            total_episodes = sum(len(season.get('episodes', [])) for season in tv_details.get('seasons', []))
+            poster = tv_details.get('image', '')
+            backdrop = ''
+            genres = tv_details.get('genre', [])
+            ep_title = ep_details.get('title', f"S{season}E{episode}") if ep_details else f"S{season}E{episode}"
+            ep_backdrop = ep_details.get('image', '') if ep_details else ''
+            try:
+                await asyncio.sleep(DELAY)
+                fallback_results = await tmdb.search().tv(query=show_title)
+                if fallback_results:
+                    fallback_id = fallback_results[0].id
+                    fallback_detail = await tmdb.tv(fallback_id).details()
+                    backdrop = f"https://image.tmdb.org/t/p/original{fallback_detail.backdrop_path}" if fallback_detail.backdrop_path else ''
+                    status = fallback_detail.status or 'Unknown'
+                else:
+                    status = 'Unknown'
+            except Exception as e:
+                LOGGER.warning(f"Fallback TMDb metadata fetch failed: {e}")
+                status = 'Unknown'
+
+        result = {
+            "tmdb_id": tmdb_id,
+            "title": show_title,
+            "year": show_year,
+            "rate": rate,
+            "description": description,
+            "total_seasons": total_seasons,
+            "total_episodes": total_episodes,
+            "poster": poster,
+            "backdrop": backdrop,
+            "status": status,
+            "genres": genres,
+            "media_type": "tv",
+            "season_number": season,
+            "episode_number": episode,
+            "episode_title": ep_title,
+            "episode_backdrop": ep_backdrop,
+            "quality": quality,
+            "languages": languages or ['hi'],
+            "rip": rip or 'Blu-ray'
+        }
+
+        LOGGER.info(f"Metadata successfully fetched for {show_title} S{season}E{episode}")
+        return result
+
+    except Exception as e:
+        LOGGER.error(f"Error fetching TV metadata for '{title}' S{season}E{episode}: {e}", exc_info=True)
+        return None
+
+
+
+
+async def fetch_movie_metadata(title: str, year=None, quality=None, default_id=None, languages=None, rip=None) -> dict:
+    try:
+        movie_details, use_tmdb = None, False
+        imdb_id = default_id if default_id and default_id.startswith("tt") else None
+
+        if not imdb_id:
+            try:
+                result = await search_title(query=f"{title} {year}" if year else title, type="movie")
+                imdb_id = result['id'] if result else None
+                
+            except Exception as e:
+                LOGGER.warning(f"IMDb search failed for '{title}': {e}")
+                imdb_id = None
+
+        if imdb_id:
+            try:
+                clean_id = imdb_id[2:] if imdb_id.startswith("tt") else imdb_id
+                LOGGER.debug(f"Fetching IMDb details using ID: {clean_id}")
+                movie_details = await get_detail(imdb_id=clean_id)
+               
+            except Exception as e:
+                LOGGER.warning(f"IMDb movie fetch failed for '{title}': {e}")
+                movie_details = None
+
+        if not movie_details:
+            use_tmdb = True
+            try:
+                tmdb_results = await tmdb.search().movies(query=title, year=year) if year else await tmdb.search().movies(query=title)
+                if not tmdb_results:
+                    LOGGER.warning(f"No TMDB results found for '{title}'")
+                    return None
+                movie_id = tmdb_results[0].id
+                movie_details = await tmdb.movie(movie_id).details()
+            except Exception as e:
+                LOGGER.error(f"TMDB search failed for '{title}': {e}")
+                return None
+
+        if use_tmdb:
+            tmdb_id = movie_details.id
+            movie_title = movie_details.title
+            movie_year = movie_details.release_date.year if movie_details.release_date else 0
+            rate = movie_details.vote_average or 0
+            description = movie_details.overview or ''
+            poster = f"https://image.tmdb.org/t/p/w500{movie_details.poster_path}" if movie_details.poster_path else ''
+            backdrop = f"https://image.tmdb.org/t/p/original{movie_details.backdrop_path}" if movie_details.backdrop_path else ''
+            runtime = movie_details.runtime or 0
+            genres = [genre.name for genre in movie_details.genres] if movie_details.genres else []
+        else:
+            description = movie_details.get('plot', '')
+            tmdb_id = movie_details['id'].replace("tt", "")
+            movie_title = movie_details.get('title', title)
+            movie_year = movie_details.get('releaseDetailed', {}).get('year', 0)
+            rate = movie_details.get('rating', {}).get('star', 0)
+            runtime = movie_details.get('runtimeSeconds', 0) // 60
+            genres = movie_details.get('genre', [])
+            try:
+                force_tmdb_results = await tmdb.search().movies(query=movie_title, year=movie_year)
+                force_movie_id = force_tmdb_results[0].id
+                force_movie_details = await tmdb.movie(force_movie_id).details()
+                backdrop = f"https://image.tmdb.org/t/p/original{force_movie_details.backdrop_path}" if force_movie_details.backdrop_path else ''
+                poster = movie_details.get('image', '') or \
+                         (f"https://image.tmdb.org/t/p/w500{force_movie_details.poster_path}" if force_movie_details.poster_path else '')
+            except Exception as e:
+                backdrop = ''
+                poster = ''
+
+        LOGGER.info(f"Metadata fetched successfully for '{movie_title}' ({movie_year})")
+        return {
+            "tmdb_id": tmdb_id,
+            "title": movie_title,
+            "year": movie_year,
+            "rate": rate,
+            "description": description,
+            "poster": poster,
+            "backdrop": backdrop,
+            "media_type": "movie",
+            "genres": genres,
+            "runtime": runtime,
+            "quality": quality,
+            "languages": languages or ['hi'],
+            "rip": rip or 'Blu-ray'
+        }
+
+    except Exception as e:
+        LOGGER.error(f"Unhandled error in fetch_movie_metadata for '{title}': {e}")
+        return None

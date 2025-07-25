@@ -46,15 +46,10 @@ def get_readable_file_size(size_in_bytes):
 
 
 def clean_filename(filename):
-    # Pattern to match any @value with optional surrounding symbols and spaces
     pattern = r'_@[A-Za-z]+_|@[A-Za-z]+_|[\[\]\s@]*@[^.\s\[\]]+[\]\[\s@]*'
-    
-    # Substitute the matched pattern with an empty string
     cleaned_filename = re.sub(pattern, '', filename)
     cleaned_filename = re.sub(r'(?<=\W)(org|AMZN|DDP|DD|NF|AAC|TVDL|5\.1|2\.1|2\.0|7\.0|7\.1|5\.0|~|\b\w+kbps\b)(?=\W)', '', cleaned_filename, flags=re.IGNORECASE)
-    # Remove any extra spaces or dots that might result from the substitution
     cleaned_filename = re.sub(r'\s+', ' ', cleaned_filename).strip().replace(' .', '.')
-    
     return cleaned_filename
 
 
@@ -98,7 +93,6 @@ def extract_tmdb_id(url):
     return None
 
 def remove_urls(text):
-    # Updated regular expression pattern to match URLs
     url_pattern = r'\b(?:https?|ftp):\/\/[^\s/$.?#].[^\s]*'
     text_without_urls = re.sub(url_pattern, '', text)
     cleaned_text = re.sub(r'\s+', ' ', text_without_urls).strip()

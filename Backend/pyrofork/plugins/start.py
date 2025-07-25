@@ -216,76 +216,58 @@ async def start(bot: Client, message: Message):
 
 
 # Global queue for processing file updates
-file_queue = Queue()
-
 from asyncio import Lock
 
-# Global lock for database access
+file_queue = Queue()
 db_lock = Lock()
 
 async def process_file():
     while True:
         metadata_info, hash, channel, msg_id, size, title = await file_queue.get()
-
-        # Acquire the lock before updating the database
         async with db_lock:
             updated_id = await db.insert_media(metadata_info, hash=hash, channel=channel, msg_id=msg_id, size=size, name=title)
-
             if updated_id:
                 LOGGER.info(f"{metadata_info['media_type']} updated with ID: {updated_id}")
             else:
                 LOGGER.info("Update failed due to validation errors.")
-
         file_queue.task_done()
 
-
-
-# Start the file processing tasks (adjust the number of workers as needed)
-for _ in range(1):  # Two concurrent workers
+for _ in range(1):
     create_task(process_file())
 
-@StreamBot.on_message(
-    filters.channel
-    & (
-        filters.document
-        | filters.video
-    )
-)
+
+@StreamBot.on_message(filters.channel & (filters.document | filters.video))
 async def file_receive_handler(bot: Client, message: Message):
     if str(message.chat.id) in Telegram.AUTH_CHANNEL:
         try:
-            if message.video or message.document:
+            if message.video or message.document.mime_type.startswith("video/"):
                 file = message.video or message.document
-                if Telegram.USE_CAPTION:
+                if message.caption:
                     title = message.caption.replace("\n", "\\n")
                 else:
                     title = file.file_name or file.file_id
+
                 msg_id = message.id
                 hash = file.file_unique_id[:6]
                 size = get_readable_file_size(file.file_size)
-                channel = str(message.chat.id).replace("-100","")
+                channel = str(message.chat.id).replace("-100", "")
                 
-
                 metadata_info = await metadata(clean_filename(title), file)
                 if metadata_info is None:
-                    return
-
-
-                # Add file data to the queue for processing
+                    return await message.reply_text("> Not added check log")
                 title = remove_urls(title)
-                if not title.endswith('.mkv'):
+                if not title.endswith(('.mkv', '.mp4')):
                     title += '.mkv'
                 await file_queue.put((metadata_info, hash, int(channel), msg_id, size, title))
-
             else:
-                await message.reply_text("Not supported")
+                await message.reply_text("> Not supported")
         except FloodWait as e:
             LOGGER.info(f"Sleeping for {str(e.value)}s")
             await asleep(e.value)
             await message.reply_text(text=f"Got Floodwait of {str(e.value)}s",
                                 disable_web_page_preview=True, parse_mode=ParseMode.MARKDOWN)
     else:
-        await message.reply(text="Channel is not in AUTH_CHANNEL")
+        await message.reply(text="> Channel is not in AUTH_CHANNEL")
 
 
 @Client.on_message(filters.command('caption') & filters.private & CustomFilters.owner)
@@ -349,4 +331,3 @@ async def delete(bot: Client, message: Message):
     
     except Exception as e:
         await message.reply_text(f"An error occurred: {str(e)}")
-        

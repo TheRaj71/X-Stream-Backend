@@ -78,4 +78,3 @@ if __name__ == '__main__':
     finally:
         loop.run_until_complete(stop_services())
         loop.stop()
-        
