@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xstream-backend
+  labels:
+    app: xstream-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: xstream-backend
+  template:
+    metadata:
+      labels:
+        app: xstream-backend
+    spec:
+      containers:
+      - name: xstream-backend
+        image: your-dockerhub-username/xstream-backend:latest
+        ports:
+        - containerPort: 8000
+        envFrom:
+        - configMapRef:
+            name: xstream-backend-config
+            optional: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
