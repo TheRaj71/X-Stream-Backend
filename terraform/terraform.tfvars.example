@@ -1,0 +1,11 @@
+aws_region      = "us-east-1"
+key_name        = "replace-with-existing-ec2-keypair"
+ssh_cidr        = "replace-with-your-public-ip/32"
+public_web_cidr = "0.0.0.0/0"
+
+jenkins_instance_type    = "t3.small"
+app_instance_type        = "t3.small"
+monitoring_instance_type = "t3.micro"
+
+# Optional but recommended after you pick a region:
+# ubuntu_ami_id = "ami-xxxxxxxxxxxxxxxxx"

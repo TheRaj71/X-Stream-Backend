@@ -8,3 +8,10 @@ log.txt
 /.vscode/
 test.py
 *.pyc
+.terraform/
+*.tfvars
+!*.tfvars.example
+*.tfplan
+terraform.tfstate
+terraform.tfstate.*
+*.pem

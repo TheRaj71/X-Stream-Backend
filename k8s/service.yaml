@@ -8,10 +8,11 @@ metadata:
     prometheus.io/scrape: "true"
     prometheus.io/port: "8000"
 spec:
-  type: LoadBalancer
+  type: NodePort
   ports:
   - port: 80
     targetPort: 8000
+    nodePort: 30080
     protocol: TCP
   selector:
     app: xstream-backend

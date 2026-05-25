@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROMETHEUS_VERSION="v3.5.3"
+GRAFANA_VERSION="13.0.1-security-01"
+NODE_EXPORTER_VERSION="v1.10.2"
+DOCKER_VERSION="5:29.5.2-1~ubuntu.24.04~noble"
+CONTAINERD_VERSION="1.7.28-1~ubuntu.24.04~noble"
+APP_PRIVATE_IP="${app_private_ip}"
+
+apt-get update
+apt-get install -y ca-certificates curl gnupg lsb-release
+
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$${VERSION_CODENAME}") stable" > /etc/apt/sources.list.d/docker.list
+
+apt-get update
+apt-get install -y \
+  "containerd.io=$${CONTAINERD_VERSION}" \
+  "docker-ce=$${DOCKER_VERSION}" \
+  "docker-ce-cli=$${DOCKER_VERSION}"
+systemctl enable --now docker
+apt-mark hold containerd.io docker-ce docker-ce-cli
+
+mkdir -p /opt/xstream-monitoring/prometheus
+mkdir -p \
+  /opt/xstream-monitoring/grafana/provisioning/datasources \
+  /opt/xstream-monitoring/grafana/provisioning/dashboards \
+  /opt/xstream-monitoring/grafana/dashboards
+cat >/opt/xstream-monitoring/prometheus/prometheus.yml <<EOF
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["prometheus:9090"]
+
+  - job_name: app-node
+    static_configs:
+      - targets: ["$${APP_PRIVATE_IP}:9100"]
+
+  - job_name: app-cadvisor
+    static_configs:
+      - targets: ["$${APP_PRIVATE_IP}:8080"]
+
+  - job_name: monitoring-node
+    static_configs:
+      - targets: ["host.docker.internal:9100"]
+EOF
+
+cat >/opt/xstream-monitoring/grafana/provisioning/datasources/prometheus.yml <<EOF
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+EOF
+
+cat >/opt/xstream-monitoring/grafana/provisioning/dashboards/xstream.yml <<EOF
+apiVersion: 1
+
+providers:
+  - name: Xstream
+    orgId: 1
+    folder: Xstream
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+EOF
+
+cat >/opt/xstream-monitoring/grafana/dashboards/xstream-overview.json <<EOF
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "fieldConfig": {"defaults": {"mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}, "unit": "none"}, "overrides": []},
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "up{job=\"app-node\"}", "legendFormat": "app-node", "refId": "A"}],
+      "title": "App Node Up",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "fieldConfig": {"defaults": {"mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}, "unit": "none"}, "overrides": []},
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 0},
+      "id": 2,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "up{job=\"app-cadvisor\"}", "legendFormat": "cadvisor", "refId": "A"}],
+      "title": "cAdvisor Up",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 15, "lineWidth": 2, "showPoints": "never"}, "mappings": [], "unit": "percentunit"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "id": 3,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+      "targets": [{"expr": "1 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))", "legendFormat": "{{instance}}", "refId": "A"}],
+      "title": "Node CPU Usage",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 42,
+  "tags": ["xstream", "aws", "kubernetes"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "timezone": "browser",
+  "title": "Xstream Overview",
+  "uid": "xstream-overview",
+  "version": 1
+}
+EOF
+
+chmod -R a+rX /opt/xstream-monitoring/grafana
+
+cat >/opt/xstream-monitoring/docker-compose.yml <<EOF
+services:
+  prometheus:
+    image: prom/prometheus:$${PROMETHEUS_VERSION}
+    container_name: prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:$${GRAFANA_VERSION}
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: change-me-after-first-login
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  node-exporter:
+    image: quay.io/prometheus/node-exporter:$${NODE_EXPORTER_VERSION}
+    container_name: node-exporter
+    network_mode: host
+    pid: host
+    command:
+      - "--path.rootfs=/host"
+    volumes:
+      - /:/host:ro,rslave
+    restart: unless-stopped
+
+volumes:
+  prometheus-data:
+  grafana-data:
+EOF
+
+cd /opt/xstream-monitoring
+docker compose up -d

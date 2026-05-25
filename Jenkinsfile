@@ -2,10 +2,11 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_IMAGE = "xstream-backend"
-        DOCKER_REGISTRY = "your-dockerhub-username"
-        IMAGE_TAG = "${env.BUILD_NUMBER}"
-        KUBECONFIG_CREDENTIAL = "k8s-kubeconfig" // Jenkins credential ID for Kubernetes cluster
+        APP_HOST = "3.7.236.240"
+        APP_USER = "ubuntu"
+        SSH_KEY = "/var/lib/jenkins/.ssh/xstream-devops-ap-south-1.pem"
+        REMOTE_DIR = "/tmp/xstream-backend-build"
+        IMAGE_NAME = "xstream-backend:local"
     }
 
     stages {
@@ -15,39 +16,47 @@ pipeline {
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Package Source') {
             steps {
-                script {
-                    dockerImage = docker.build("${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${IMAGE_TAG}")
-                    docker.build("${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest")
-                }
+                sh '''
+                    rm -f /tmp/xstream-backend-${BUILD_NUMBER}.tar.gz
+                    tar \
+                      --exclude=.git \
+                      --exclude=.terraform \
+                      --exclude='*.tfstate*' \
+                      --exclude='*.tfvars' \
+                      --exclude='*.pem' \
+                      -czf /tmp/xstream-backend-${BUILD_NUMBER}.tar.gz .
+                '''
             }
         }
 
-        stage('Push to Docker Registry') {
+        stage('Build and Deploy on App Node') {
             steps {
-                script {
-                    withDockerRegistry(credentialsId: 'dockerhub-credentials', url: '') {
-                        dockerImage.push()
-                        dockerImage.push("latest")
-                    }
-                }
-            }
-        }
-
-        stage('Deploy to Kubernetes') {
-            steps {
-                withCredentials([file(credentialsId: "${KUBECONFIG_CREDENTIAL}", variable: 'KUBECONFIG')]) {
-                    sh '''
-                        # Replace image tag in deployment file
-                        sed -i "s|image: .*|image: ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${IMAGE_TAG}|g" k8s/deployment.yaml
-                        
-                        # Apply Kubernetes manifests
-                        kubectl apply -f k8s/deployment.yaml
+                sh '''
+                    scp -i "${SSH_KEY}" -o StrictHostKeyChecking=no /tmp/xstream-backend-${BUILD_NUMBER}.tar.gz "${APP_USER}@${APP_HOST}:/tmp/xstream-backend-${BUILD_NUMBER}.tar.gz"
+                    ssh -i "${SSH_KEY}" -o StrictHostKeyChecking=no "${APP_USER}@${APP_HOST}" "
+                        set -e
+                        rm -rf ${REMOTE_DIR}
+                        mkdir -p ${REMOTE_DIR}
+                        tar -xzf /tmp/xstream-backend-${BUILD_NUMBER}.tar.gz -C ${REMOTE_DIR}
+                        cd ${REMOTE_DIR}
+                        sudo docker build -t ${IMAGE_NAME} .
+                        sudo docker save ${IMAGE_NAME} | sudo ctr -n k8s.io images import -
                         kubectl apply -f k8s/service.yaml
-                    '''
-                }
+                        kubectl apply -f k8s/deployment.yaml
+                        kubectl rollout restart deployment/xstream-backend
+                        kubectl rollout status deployment/xstream-backend --timeout=180s
+                        rm -rf ${REMOTE_DIR} /tmp/xstream-backend-${BUILD_NUMBER}.tar.gz
+                    "
+                '''
             }
+        }
+    }
+
+    post {
+        always {
+            sh 'rm -f /tmp/xstream-backend-${BUILD_NUMBER}.tar.gz'
         }
     }
 }
