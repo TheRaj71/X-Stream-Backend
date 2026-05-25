@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: xstream-backend
-          image: xstream-backend:local
+        image: xstream-backend:local
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8000
