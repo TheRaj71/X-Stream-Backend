@@ -14,10 +14,12 @@ spec:
       labels:
         app: xstream-backend
     spec:
+      imagePullSecrets:
+      - name: dockerhub-pull-secret
       containers:
       - name: xstream-backend
-        image: xstream-backend:local
-        imagePullPolicy: IfNotPresent
+        image: docker.io/theraj71/xstream-backend:0.0.0
+        imagePullPolicy: Always
         ports:
         - containerPort: 8000
         readinessProbe:

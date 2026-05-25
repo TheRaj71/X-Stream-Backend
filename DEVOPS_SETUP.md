@@ -37,10 +37,12 @@ Pins are kept in `scripts/versions.env` and repeated in Terraform/bootstrap wher
 - Existing EC2 key pair in the selected AWS region.
 - Your public IP in CIDR format, for example `203.0.113.10/32`.
 - Jenkins EC2 access to the app node SSH key at `/var/lib/jenkins/.ssh/xstream-devops-ap-south-1.pem`.
+- Jenkins Docker login configured for `theraj71`.
+- Kubernetes DockerHub pull secret named `dockerhub-pull-secret`.
 - Frontend build environment file at `/var/lib/jenkins/xstream/frontend.env`.
 - Backend secret values. Start from `k8s/backend-secret.example.yaml`, replace values, and apply it before backend deployment.
 
-Docker Hub is optional for this branch. The current Jenkinsfiles build/import images directly on the EC2 app node so private registry credentials are not required.
+DockerHub images are tagged as `BUILD_NUMBER-GIT_SHA`; the pipeline does not publish or deploy `latest`.
 
 ## Provision AWS Infrastructure
 
@@ -87,10 +89,9 @@ Each Jenkinsfile:
 
 - Polls the GitHub `aws` branch every two minutes.
 - Builds with pinned Docker base images.
-- Copies build artifacts to the app EC2 over SSH.
-- Imports the image into the Kubernetes node container runtime.
+- Pushes a versioned image to DockerHub.
 - Applies Kubernetes manifests.
-- Restarts the deployment.
+- Updates the deployment to the exact pushed image tag.
 - Waits for rollout completion.
 
 ## Access
