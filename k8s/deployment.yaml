@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: xstream-backend
-        image: docker.io/your-dockerhub-username/xstream-backend:0.0.0
+          image: xstream-backend:local
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8000
