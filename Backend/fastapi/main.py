@@ -76,9 +76,9 @@ async def is_member(user_id: int, channel: int):
 
 @app.get("/watch/{tmdb_id}", response_class=HTMLResponse)
 async def watch(
-    request: Request, 
-    tmdb_id: int, 
-    season_number: Optional[int] = Query(None), 
+    request: Request,
+    tmdb_id: int,
+    season_number: Optional[int] = Query(None),
     episode_number: Optional[int] = Query(None)
 ):
     """
@@ -92,11 +92,11 @@ async def watch(
     """
 
     return templates.TemplateResponse(
-        "index.html", 
+        "index.html",
         {
-            "request": request, 
-            "id": tmdb_id, 
-            "season": season_number, 
+            "request": request,
+            "id": tmdb_id,
+            "season": season_number,
             "episode": episode_number
         }
     )
@@ -129,10 +129,34 @@ async def get_sorted_movies(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@app.get("/api/editors-choice", response_model=dict)
+async def get_editors_choice(
+    media_type: str = Query(default="all", pattern="^(all|movie|tv|tvshow)$"),
+    page: int = Query(default=1, ge=1, description="Page number to return"),
+    page_size: int = Query(default=20, ge=1, le=100, description="Number of items per page"),
+    min_rating: float = Query(default=7.0, ge=0, le=10, description="Minimum rating to include"),
+    min_files: int = Query(default=1, ge=1, description="Minimum available Telegram files"),
+):
+    """
+    Curated high-quality media for homepage/editor sections.
+    Uses rating, stored vote/popularity fields when available, and local file availability.
+    """
+    try:
+        return await db.get_editors_choice(
+            media_type=media_type,
+            page=page,
+            page_size=page_size,
+            min_rating=min_rating,
+            min_files=min_files,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 #Homepage:------
 # hero = http://localhost:8000/api/tvshows?sort_by=rating:desc&sort_by=release_year:desc&page=1&page_size=10
 # latest movies = http://localhost:8000/api/movies?sort_by=updated_on:desc&page=1&page_size=20
 # latest tvshows = http://localhost:8000/api/tvshows?sort_by=updated_on:desc&page=1&page_size=20
+# editors choice = http://localhost:8000/api/editors-choice?media_type=all&page=1&page_size=20
 
 #Movies:----------
 # latest movies = http://localhost:8000/api/movies?sort_by=updated_on:desc&page=1&page_size=40
@@ -144,8 +168,8 @@ async def get_sorted_movies(
 
 @app.get("/api/id/{tmdb_id}", response_model=dict)
 async def get_media_details(
-    tmdb_id: int, 
-    season_number: Optional[int] = Query(None), 
+    tmdb_id: int,
+    season_number: Optional[int] = Query(None),
     episode_number: Optional[int] = Query(None)
 ) -> Union[dict, None]:
     """
@@ -153,14 +177,14 @@ async def get_media_details(
     by TMDB ID, season number, and episode number.
     """
     details = await db.get_media_details(
-        tmdb_id=tmdb_id, 
-        season_number=season_number, 
+        tmdb_id=tmdb_id,
+        season_number=season_number,
         episode_number=episode_number
     )
 
     if not details:
         raise HTTPException(status_code=404, detail="Requested details not found")
-    
+
     return details
 
 
@@ -174,7 +198,7 @@ async def get_similar_media(
 ):
     """
     FastAPI endpoint to get similar movies or TV shows based on the parent tmdb_id, sorted by the number of genre matches and rating.
-    
+
     :param tmdb_id: The TMDB ID of the parent movie or TV show.
     :param media_type: The media type ('movie' or 'tvshow').
     :param page: The page number to return.
@@ -219,7 +243,7 @@ async def search_documents_endpoint(
 
 
 @app.get('/dl/{id}/{name}')
-    
+
 async def stream_handler(request: Request, id: str, name: str):
     decoded_data = await decode_string(id)
     if not decoded_data['msg_id'] or not decoded_data['hash']:
@@ -229,7 +253,7 @@ async def stream_handler(request: Request, id: str, name: str):
 
 
 
-    
+
 
 
 async def media_streamer(request: Request, chat_id: int, id: int, secure_hash: str):
@@ -301,7 +325,7 @@ async def media_streamer(request: Request, chat_id: int, id: int, secure_hash: s
     #         yield chunk
     LOGGER.info(f"{mime_type}, {file_name}, {disposition}")
     return StreamingResponse(
-        
+
         status_code=206 if range_header else 200,
         content=body,
         headers={

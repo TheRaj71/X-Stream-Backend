@@ -1,5 +1,10 @@
 .venv
+.venv-wsl
+config.env
 log.txt
+runtime.out.log
+runtime.err.log
+.runtime.pid
 **/__pycache__/
 *.session
 *.session-journal

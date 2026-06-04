@@ -69,24 +69,32 @@ async def metadata(filename: str, media) -> dict:
 
 async def fetch_tv_metadata(title: str, season: int, episode: int, year=None, quality=None, default_id=None, languages=None, rip=None) -> dict:
     try:
-        tv_details, ep_details, use_tmdb = None, None, False
-        imdb_id = default_id if default_id and default_id.startswith("tt") else None
+        tv_details, ep_details, use_tmdb = None, None, Telegram.USE_TMDB
+        imdb_id = default_id if not use_tmdb and default_id and default_id.startswith("tt") else None
 
-        if not imdb_id:
-            result = await search_title(query=f"{title} {year}" if year else title, type="tvSeries")
-            imdb_id = result['id'] if result else None
-
-        if imdb_id:
+        if not use_tmdb and not imdb_id:
             try:
+                result = await search_title(
+                    query=f"{title} {year}" if year else title,
+                    type="tvSeries",
+                )
+                imdb_id = result['id'] if result else None
+            except Exception as e:
+                LOGGER.warning(f"IMDb TV search failed for '{title}': {e}")
+                imdb_id = None
+
+        if not use_tmdb and imdb_id:
+            try:
+                clean_id = imdb_id[2:] if imdb_id.startswith("tt") else imdb_id
                 await asyncio.sleep(DELAY)
-                tv_details = await get_detail(imdb_id=imdb_id)
+                tv_details = await get_detail(imdb_id=clean_id)
                 await asyncio.sleep(DELAY)
-                ep_details = await get_season(imdb_id=imdb_id, season_id=season, episode_id=episode)
+                ep_details = await get_season(imdb_id=clean_id, season_id=season, episode_id=episode)
             except Exception as e:
                 LOGGER.warning(f"IMDb TV fetch failed for ID {imdb_id}: {e}")
                 tv_details, ep_details = None, None
 
-        if not tv_details or not ep_details:
+        if use_tmdb or not tv_details or not ep_details:
             use_tmdb = True
             await asyncio.sleep(DELAY)
             tmdb_results = await tmdb.search().tv(query=title)
@@ -103,6 +111,8 @@ async def fetch_tv_metadata(title: str, season: int, episode: int, year=None, qu
             show_title = tv_details.name
             show_year = tv_details.first_air_date.year if tv_details.first_air_date else 0
             rate = tv_details.vote_average or 0
+            vote_count = getattr(tv_details, "vote_count", 0) or 0
+            popularity = getattr(tv_details, "popularity", 0) or 0
             description = tv_details.overview or ''
             total_seasons = tv_details.number_of_seasons or 0
             total_episodes = tv_details.number_of_episodes or 0
@@ -117,6 +127,8 @@ async def fetch_tv_metadata(title: str, season: int, episode: int, year=None, qu
             show_title = tv_details.get('title', title)
             show_year = tv_details.get('releaseDetailed', {}).get('year', 0)
             rate = tv_details.get('rating', {}).get('star', 0)
+            vote_count = tv_details.get('rating', {}).get('count', 0) or 0
+            popularity = 0
             description = tv_details.get('plot', '')
             total_seasons = len(tv_details.get('all_seasons', []))
             total_episodes = sum(len(season.get('episodes', [])) for season in tv_details.get('seasons', []))
@@ -144,6 +156,8 @@ async def fetch_tv_metadata(title: str, season: int, episode: int, year=None, qu
             "title": show_title,
             "year": show_year,
             "rate": rate,
+            "vote_count": vote_count,
+            "popularity": popularity,
             "description": description,
             "total_seasons": total_seasons,
             "total_episodes": total_episodes,
@@ -173,29 +187,29 @@ async def fetch_tv_metadata(title: str, season: int, episode: int, year=None, qu
 
 async def fetch_movie_metadata(title: str, year=None, quality=None, default_id=None, languages=None, rip=None) -> dict:
     try:
-        movie_details, use_tmdb = None, False
-        imdb_id = default_id if default_id and default_id.startswith("tt") else None
+        movie_details, use_tmdb = None, Telegram.USE_TMDB
+        imdb_id = default_id if not use_tmdb and default_id and default_id.startswith("tt") else None
 
-        if not imdb_id:
+        if not use_tmdb and not imdb_id:
             try:
                 result = await search_title(query=f"{title} {year}" if year else title, type="movie")
                 imdb_id = result['id'] if result else None
-                
+
             except Exception as e:
                 LOGGER.warning(f"IMDb search failed for '{title}': {e}")
                 imdb_id = None
 
-        if imdb_id:
+        if not use_tmdb and imdb_id:
             try:
                 clean_id = imdb_id[2:] if imdb_id.startswith("tt") else imdb_id
                 LOGGER.debug(f"Fetching IMDb details using ID: {clean_id}")
                 movie_details = await get_detail(imdb_id=clean_id)
-               
+
             except Exception as e:
                 LOGGER.warning(f"IMDb movie fetch failed for '{title}': {e}")
                 movie_details = None
 
-        if not movie_details:
+        if use_tmdb or not movie_details:
             use_tmdb = True
             try:
                 tmdb_results = await tmdb.search().movies(query=title, year=year) if year else await tmdb.search().movies(query=title)
@@ -213,6 +227,8 @@ async def fetch_movie_metadata(title: str, year=None, quality=None, default_id=N
             movie_title = movie_details.title
             movie_year = movie_details.release_date.year if movie_details.release_date else 0
             rate = movie_details.vote_average or 0
+            vote_count = getattr(movie_details, "vote_count", 0) or 0
+            popularity = getattr(movie_details, "popularity", 0) or 0
             description = movie_details.overview or ''
             poster = f"https://image.tmdb.org/t/p/w500{movie_details.poster_path}" if movie_details.poster_path else ''
             backdrop = f"https://image.tmdb.org/t/p/original{movie_details.backdrop_path}" if movie_details.backdrop_path else ''
@@ -224,6 +240,8 @@ async def fetch_movie_metadata(title: str, year=None, quality=None, default_id=N
             movie_title = movie_details.get('title', title)
             movie_year = movie_details.get('releaseDetailed', {}).get('year', 0)
             rate = movie_details.get('rating', {}).get('star', 0)
+            vote_count = movie_details.get('rating', {}).get('count', 0) or 0
+            popularity = 0
             runtime = movie_details.get('runtimeSeconds', 0) // 60
             genres = movie_details.get('genre', [])
             try:
@@ -243,6 +261,8 @@ async def fetch_movie_metadata(title: str, year=None, quality=None, default_id=N
             "title": movie_title,
             "year": movie_year,
             "rate": rate,
+            "vote_count": vote_count,
+            "popularity": popularity,
             "description": description,
             "poster": poster,
             "backdrop": backdrop,

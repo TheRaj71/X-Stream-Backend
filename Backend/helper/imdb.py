@@ -1,7 +1,7 @@
 import httpx
 from Backend.config import Telegram
 
-BASE_URL = Telegram.IMDB_API
+BASE_URL = Telegram.IMDB_API.rstrip("/")
 
 async def search_title(query: str, type: str):
     async with httpx.AsyncClient() as client:

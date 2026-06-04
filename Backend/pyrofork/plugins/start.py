@@ -82,7 +82,7 @@ async def create_user(bot: Client, message: Message):
 async def restart(bot: Client, message: Message):
     try:
         # Notify the user that the bot is restarting
-        
+
         restart_message = await message.reply_text(
     '<blockquote>⚙️ Restarting Backend API... \n\n✨ Please wait as we bring everything back online! 🚀</blockquote>',
         quote=True,
@@ -109,25 +109,25 @@ async def restart(bot: Client, message: Message):
 
 
 async def delete_messages_after_delay(messages):
-    await asleep(300)  
+    await asleep(300)
     for msg in messages:
         try:
             await msg.delete()
         except Exception as e:
             LOGGER.error(f"Error deleting message {msg.id}: {e}")
-        await asleep(2)  
+        await asleep(2)
 
 @StreamBot.on_message(filters.command('start') & filters.private)
 async def start(bot: Client, message: Message):
     LOGGER.info(f"Received command: {message.text}")
-    
+
     command_part = message.text.split('start ')[-1]
-    
+
     if command_part.startswith("file_"):
         usr_cmd = command_part[len("file_"):].strip()
-        
+
         parts = usr_cmd.split("_")
-        
+
         if len(parts) == 2:
             try:
                 tmdb_id, quality = parts
@@ -138,7 +138,7 @@ async def start(bot: Client, message: Message):
                 LOGGER.error(f"Error parsing movie command: {usr_cmd}")
                 await message.reply_text("Invalid command format for movie.")
                 return
-        
+
         elif len(parts) == 3:
             try:
                 tmdb_id, season, quality = parts
@@ -224,13 +224,37 @@ db_lock = Lock()
 async def process_file():
     while True:
         metadata_info, hash, channel, msg_id, size, title = await file_queue.get()
-        async with db_lock:
-            updated_id = await db.insert_media(metadata_info, hash=hash, channel=channel, msg_id=msg_id, size=size, name=title)
-            if updated_id:
-                LOGGER.info(f"{metadata_info['media_type']} updated with ID: {updated_id}")
-            else:
-                LOGGER.info("Update failed due to validation errors.")
-        file_queue.task_done()
+        try:
+            async with db_lock:
+                LOGGER.info(
+                    "Processing queued %s file: channel=%s message=%s title=%s",
+                    metadata_info.get("media_type"),
+                    channel,
+                    msg_id,
+                    title,
+                )
+                updated_id = await db.insert_media(
+                    metadata_info,
+                    hash=hash,
+                    channel=channel,
+                    msg_id=msg_id,
+                    size=size,
+                    name=title,
+                )
+                if updated_id:
+                    LOGGER.info(f"{metadata_info['media_type']} updated with ID: {updated_id}")
+                else:
+                    LOGGER.info("Update failed due to validation errors.")
+        except Exception:
+            LOGGER.exception(
+                "Failed to process queued file: channel=%s message=%s title=%s metadata=%r",
+                channel,
+                msg_id,
+                title,
+                metadata_info,
+            )
+        finally:
+            file_queue.task_done()
 
 for _ in range(1):
     create_task(process_file())
@@ -251,14 +275,35 @@ async def file_receive_handler(bot: Client, message: Message):
                 hash = file.file_unique_id[:6]
                 size = get_readable_file_size(file.file_size)
                 channel = str(message.chat.id).replace("-100", "")
-                
-                metadata_info = await metadata(clean_filename(title), file)
+
+                cleaned_title = clean_filename(title)
+                LOGGER.info(
+                    "Received media file: channel=%s message=%s filename=%s cleaned=%s",
+                    message.chat.id,
+                    msg_id,
+                    title,
+                    cleaned_title,
+                )
+                metadata_info = await metadata(cleaned_title, file)
                 if metadata_info is None:
+                    LOGGER.warning(
+                        "Metadata parsing returned no result: channel=%s message=%s filename=%s",
+                        message.chat.id,
+                        msg_id,
+                        title,
+                    )
                     return await message.reply_text("> Not added check log")
                 title = remove_urls(title)
                 if not title.endswith(('.mkv', '.mp4')):
                     title += '.mkv'
                 await file_queue.put((metadata_info, hash, int(channel), msg_id, size, title))
+                LOGGER.info(
+                    "Queued %s file: channel=%s message=%s title=%s",
+                    metadata_info.get("media_type"),
+                    message.chat.id,
+                    msg_id,
+                    title,
+                )
             else:
                 await message.reply_text("> Not supported")
         except FloodWait as e:
@@ -266,6 +311,13 @@ async def file_receive_handler(bot: Client, message: Message):
             await asleep(e.value)
             await message.reply_text(text=f"Got Floodwait of {str(e.value)}s",
                                 disable_web_page_preview=True, parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            LOGGER.exception(
+                "Unhandled error receiving media: channel=%s message=%s",
+                message.chat.id,
+                message.id,
+            )
+            await message.reply_text("> Not added check log")
     else:
         await message.reply(text="> Channel is not in AUTH_CHANNEL")
 
@@ -313,11 +365,11 @@ async def delete(bot: Client, message: Message):
         split_text = message.text.split()
         if len(split_text) != 2:
             return await message.reply_text("Use this format: /delete https://domain/ser/3123")
-        
+
         url = split_text[1]
         parsed_url = urlparse(url)
         path_parts = parsed_url.path.split('/')
-        
+
         if len(path_parts) >= 3 and path_parts[-2] in ('ser', 'mov') and path_parts[-1].isdigit():
             media_type = path_parts[-2]
             tmdb_id = path_parts[-1]
@@ -328,6 +380,6 @@ async def delete(bot: Client, message: Message):
                 return await message.reply_text(f"ID {tmdb_id} wasn't found in the database.")
         else:
             return await message.reply_text("The URL format is incorrect.")
-    
+
     except Exception as e:
         await message.reply_text(f"An error occurred: {str(e)}")
