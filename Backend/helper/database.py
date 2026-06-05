@@ -259,13 +259,17 @@ class Database:
         self,
         sort_params: List[Tuple[str, str]],
         page: int,
-        page_size: int
+        page_size: int,
+        genres: Optional[List[str]] = None,
+        genre_mode: str = "any",
     ) -> dict:
         skip = (page - 1) * page_size
         sort_criteria = [(field, ASCENDING if direction == "asc" else DESCENDING)
                         for field, direction in sort_params]
+        genre_filter = self._genre_filter(genres, genre_mode)
 
         pipeline = [
+            *([{"$match": genre_filter}] if genre_filter else []),
             {"$sort": dict(sort_criteria)},
             {"$facet": {
                 "metadata": [{"$count": "total_count"}],
@@ -282,13 +286,17 @@ class Database:
         self,
         sort_params: List[Tuple[str, str]],
         page: int,
-        page_size: int
+        page_size: int,
+        genres: Optional[List[str]] = None,
+        genre_mode: str = "any",
     ) -> dict:
         skip = (page - 1) * page_size
         sort_criteria = [(field, ASCENDING if direction == "asc" else DESCENDING)
                         for field, direction in sort_params]
+        genre_filter = self._genre_filter(genres, genre_mode)
 
         pipeline = [
+            *([{"$match": genre_filter}] if genre_filter else []),
             {"$sort": dict(sort_criteria)},
             {"$facet": {
                 "metadata": [{"$count": "total_count"}],
@@ -365,7 +373,21 @@ class Database:
         tv_results = await self.tv_collection.aggregate(tv_pipeline).to_list(None)
         return movie_results, tv_results
 
-    def _editors_choice_pipeline(self, media_type: str, min_rating: float, min_files: int) -> list:
+    def _genre_filter(self, genres: Optional[List[str]], genre_mode: str = "any") -> dict:
+        clean_genres = [genre.strip() for genre in genres or [] if genre and genre.strip()]
+        if not clean_genres:
+            return {}
+
+        if genre_mode == "all":
+            return {"genres": {"$all": clean_genres}}
+        return {"genres": {"$in": clean_genres}}
+
+    def _editors_choice_pipeline(
+        self,
+        media_type: str,
+        min_rating: float,
+        min_files: int,
+    ) -> list:
         if media_type == "movie":
             available_files_expression = {"$size": {"$ifNull": ["$telegram", []]}}
         else:
@@ -386,6 +408,10 @@ class Database:
                     }
                 }
             }
+        match_filter = {
+            "rating": {"$gte": min_rating},
+            "available_files": {"$gte": min_files},
+        }
 
         return [
             {"$addFields": {
@@ -393,10 +419,7 @@ class Database:
                 "vote_count_safe": {"$ifNull": ["$vote_count", 0]},
                 "popularity_safe": {"$ifNull": ["$popularity", 0]},
             }},
-            {"$match": {
-                "rating": {"$gte": min_rating},
-                "available_files": {"$gte": min_files},
-            }},
+            {"$match": match_filter},
             {"$addFields": {
                 "editor_score": {
                     "$add": [
