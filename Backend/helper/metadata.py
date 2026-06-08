@@ -38,6 +38,20 @@ def pick_youtube_trailer(videos) -> str:
     selected = preferred or fallback
     return f"https://www.youtube.com/embed/{selected.key}?autoplay=1&mute=1&loop=1&playlist={selected.key}&controls=0&playsinline=1" if selected else None
 
+
+def format_cast(credits, limit: int = 10) -> list:
+    cast_members = getattr(credits, "cast", None) or []
+    formatted = []
+    for member in cast_members[:limit]:
+        profile_path = getattr(member, "profile_path", None)
+        formatted.append({
+            "id": getattr(member, "id", None),
+            "name": getattr(member, "name", None) or getattr(member, "original_name", ""),
+            "character": getattr(member, "character", "") or "",
+            "profile": f"https://image.tmdb.org/t/p/w185{profile_path}" if profile_path else "",
+        })
+    return formatted
+
 async def metadata(filename: str, media) -> dict:
     try:
         parsed = PTN.parse(filename)
@@ -152,6 +166,11 @@ async def fetch_tv_metadata(title: str, season: int, episode: int, year=None, qu
             except Exception as e:
                 LOGGER.warning(f"TV trailer fetch failed for {show_title}: {e}")
                 trailer_url = None
+            try:
+                cast = format_cast(await tmdb.tv(tmdb_id).credits())
+            except Exception as e:
+                LOGGER.warning(f"TV cast fetch failed for {show_title}: {e}")
+                cast = []
         else:
             tmdb_id = tv_details['id'].replace("tt", "")
             show_title = tv_details.get('title', title)
@@ -168,6 +187,7 @@ async def fetch_tv_metadata(title: str, season: int, episode: int, year=None, qu
             ep_title = ep_details.get('title', f"S{season}E{episode}") if ep_details else f"S{season}E{episode}"
             ep_backdrop = ep_details.get('image', '') if ep_details else ''
             trailer_url = None
+            cast = []
             try:
                 await asyncio.sleep(DELAY)
                 fallback_results = await tmdb.search().tv(query=show_title)
@@ -195,6 +215,7 @@ async def fetch_tv_metadata(title: str, season: int, episode: int, year=None, qu
             "poster": poster,
             "backdrop": backdrop,
             "trailer_url": trailer_url,
+            "cast": cast,
             "status": status,
             "genres": genres,
             "media_type": "tv",
@@ -271,6 +292,11 @@ async def fetch_movie_metadata(title: str, year=None, quality=None, default_id=N
             except Exception as e:
                 LOGGER.warning(f"Movie trailer fetch failed for {movie_title}: {e}")
                 trailer_url = None
+            try:
+                cast = format_cast(await tmdb.movie(tmdb_id).credits())
+            except Exception as e:
+                LOGGER.warning(f"Movie cast fetch failed for {movie_title}: {e}")
+                cast = []
         else:
             description = movie_details.get('plot', '')
             tmdb_id = movie_details['id'].replace("tt", "")
@@ -282,6 +308,7 @@ async def fetch_movie_metadata(title: str, year=None, quality=None, default_id=N
             runtime = movie_details.get('runtimeSeconds', 0) // 60
             genres = movie_details.get('genre', [])
             trailer_url = None
+            cast = []
             try:
                 force_tmdb_results = await tmdb.search().movies(query=movie_title, year=movie_year)
                 force_movie_id = force_tmdb_results[0].id
@@ -305,6 +332,7 @@ async def fetch_movie_metadata(title: str, year=None, quality=None, default_id=N
             "poster": poster,
             "backdrop": backdrop,
             "trailer_url": trailer_url,
+            "cast": cast,
             "media_type": "movie",
             "genres": genres,
             "runtime": runtime,

@@ -1,6 +1,6 @@
 from datetime import datetime
 from pydantic import BaseModel, Field, ValidationError
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 class QualityDetail(BaseModel):
     quality: str = Field(..., description="Quality of the video (e.g., 1080p, 720p)")
@@ -30,6 +30,7 @@ class TVShowSchema(BaseModel):
     poster: str = Field(..., description="URL to the poster image")
     backdrop: str = Field(..., description="URL to the backdrop image")
     trailer_url: Optional[str] = Field(default=None, description="YouTube trailer embed URL")
+    cast: List[Dict] = Field(default_factory=list, description="Primary cast")
     total_seasons: int = Field(..., description="Total Season of tv show")
     total_episodes: int = Field(..., description="Total Episode of tv show")
     media_type: str = Field(..., description="Media Type of the file")
@@ -53,6 +54,7 @@ class MovieSchema(BaseModel):
     poster: str = Field(..., description="URL to the poster image")
     backdrop: str = Field(..., description="URL to the backdrop image")
     trailer_url: Optional[str] = Field(default=None, description="YouTube trailer embed URL")
+    cast: List[Dict] = Field(default_factory=list, description="Primary cast")
     media_type: str = Field(..., description="Media Type of the file")
     runtime: int = Field(..., description="runtime of the movie")
     updated_on: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of the last update")
