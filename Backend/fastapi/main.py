@@ -174,11 +174,22 @@ async def get_editors_choice(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@app.get("/api/trending", response_model=dict)
+async def get_trending():
+    """
+    Owner-pinned trending media, ordered by Telegram bot slots 1-10.
+    """
+    try:
+        return await db.get_trending()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 #Homepage:------
 # hero = http://localhost:8000/api/tvshows?sort_by=rating:desc&sort_by=release_year:desc&page=1&page_size=10
 # latest movies = http://localhost:8000/api/movies?sort_by=updated_on:desc&page=1&page_size=20
 # latest tvshows = http://localhost:8000/api/tvshows?sort_by=updated_on:desc&page=1&page_size=20
 # editors choice = http://localhost:8000/api/editors-choice?media_type=all&page=1&page_size=20
+# pinned trending = http://localhost:8000/api/trending
 
 #Movies:----------
 # latest movies = http://localhost:8000/api/movies?sort_by=updated_on:desc&page=1&page_size=40

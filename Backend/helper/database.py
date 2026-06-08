@@ -35,6 +35,7 @@ class Database:
             self.tv_collection = self.db["tv"]
             self.movie_collection = self.db["movie"]
             self.deploy_config = self.db["deploy_config"]
+            self.trending_collection = self.db["trending"]
 
             LOGGER.info("Database connection established")
 
@@ -57,6 +58,7 @@ class Database:
         self.db = None
         self.tv_collection = None
         self.movie_collection = None
+        self.trending_collection = None
 
     @staticmethod
     def _convert_object_id(document: dict) -> dict:
@@ -460,6 +462,104 @@ class Database:
             }},
         ]
 
+    async def get_media_summary(self, media_type: str, tmdb_id: int) -> Optional[dict]:
+        collection = self.movie_collection if media_type == "movie" else self.tv_collection
+        document = await collection.find_one(
+            {"tmdb_id": tmdb_id},
+            {
+                "_id": 1,
+                "tmdb_id": 1,
+                "title": 1,
+                "genres": 1,
+                "description": 1,
+                "rating": 1,
+                "release_year": 1,
+                "poster": 1,
+                "backdrop": 1,
+                "media_type": 1,
+                "updated_on": 1,
+                "total_seasons": 1,
+                "total_episodes": 1,
+                "runtime": 1,
+                "languages": 1,
+                "rip": 1,
+            },
+        )
+        return self._convert_object_id(document) if document else None
+
+    async def pin_trending(
+        self,
+        media_type: str,
+        tmdb_id: int,
+        slot: Optional[int] = None,
+    ) -> dict:
+        media_type = "movie" if media_type in ("movie", "mov") else "tv"
+        media = await self.get_media_summary(media_type, tmdb_id)
+        if not media:
+            raise HTTPException(status_code=404, detail="Media not found")
+
+        if slot is None:
+            used_slots = await self.trending_collection.distinct("slot")
+            slot = next((item for item in range(1, 11) if item not in used_slots), None)
+            if slot is None:
+                raise HTTPException(status_code=400, detail="All 10 trending slots are full")
+
+        if slot < 1 or slot > 10:
+            raise HTTPException(status_code=400, detail="Trending slot must be between 1 and 10")
+
+        await self.trending_collection.delete_many({
+            "media_type": media_type,
+            "tmdb_id": tmdb_id,
+        })
+        await self.trending_collection.update_one(
+            {"slot": slot},
+            {"$set": {
+                "slot": slot,
+                "media_type": media_type,
+                "tmdb_id": tmdb_id,
+                "pinned_on": datetime.utcnow(),
+            }},
+            upsert=True,
+        )
+        return {"slot": slot, "media": media}
+
+    async def unpin_trending(self, slot: int) -> bool:
+        result = await self.trending_collection.delete_one({"slot": slot})
+        return result.deleted_count > 0
+
+    async def move_trending(self, from_slot: int, to_slot: int) -> bool:
+        if from_slot < 1 or from_slot > 10 or to_slot < 1 or to_slot > 10:
+            raise HTTPException(status_code=400, detail="Trending slots must be between 1 and 10")
+
+        source = await self.trending_collection.find_one({"slot": from_slot})
+        if not source:
+            return False
+
+        target = await self.trending_collection.find_one({"slot": to_slot})
+        if target:
+            await self.trending_collection.update_one({"_id": target["_id"]}, {"$set": {"slot": from_slot}})
+        await self.trending_collection.update_one({"_id": source["_id"]}, {"$set": {"slot": to_slot}})
+        return True
+
+    async def get_trending(self) -> dict:
+        pins = await self.trending_collection.find({}).sort("slot", ASCENDING).to_list(10)
+        results = []
+        stale_slots = []
+
+        for pin in pins:
+            media = await self.get_media_summary(pin.get("media_type"), pin.get("tmdb_id"))
+            if not media:
+                stale_slots.append(pin["slot"])
+                continue
+            media["trending_slot"] = pin["slot"]
+            media["pinned_on"] = pin.get("pinned_on")
+            results.append(media)
+
+        if stale_slots:
+            await self.trending_collection.delete_many({"slot": {"$in": stale_slots}})
+
+        return {"total_count": len(results), "results": results}
+
     async def find_similar_media(
         self,
         tmdb_id: int,
@@ -654,6 +754,10 @@ class Database:
             result = await self.tv_collection.delete_one({"tmdb_id": tmdb_id})
 
         if result.deleted_count > 0:
+            await self.trending_collection.delete_many({
+                "media_type": "movie" if media_type == "mov" else "tv",
+                "tmdb_id": tmdb_id,
+            })
             LOGGER.info(f"{media_type} with tmdb_id {tmdb_id} deleted successfully.")
             return True
         LOGGER.info(f"No document found with tmdb_id {tmdb_id}.")

@@ -356,6 +356,101 @@ async def set_id(bot: Client, message: Message):
         await message.reply_text(f"An error occurred: {e}")
 
 
+def parse_media_reference(parts):
+    slot = None
+    tokens = list(parts)
+
+    if tokens and tokens[0].isdigit() and 1 <= int(tokens[0]) <= 10:
+        slot = int(tokens.pop(0))
+
+    if not tokens:
+        return slot, None, None
+
+    first = tokens[0]
+    parsed_url = urlparse(first)
+    path_parts = [part for part in parsed_url.path.split("/") if part]
+    if parsed_url.scheme and len(path_parts) >= 2 and path_parts[-2] in ("mov", "ser") and path_parts[-1].isdigit():
+        media_type = "movie" if path_parts[-2] == "mov" else "tv"
+        return slot, media_type, int(path_parts[-1])
+
+    if first in ("mov", "movie", "ser", "tv", "tvshow") and len(tokens) >= 2 and tokens[1].isdigit():
+        media_type = "movie" if first in ("mov", "movie") else "tv"
+        return slot, media_type, int(tokens[1])
+
+    if first.isdigit():
+        return slot, "movie", int(first)
+
+    return slot, None, None
+
+
+@Client.on_message(filters.command('pin') & filters.private & CustomFilters.owner)
+async def pin_trending(bot: Client, message: Message):
+    try:
+        parts = message.text.split()[1:]
+        slot, media_type, tmdb_id = parse_media_reference(parts)
+        if not media_type or not tmdb_id:
+            return await message.reply_text(
+                "Use: /pin [slot] https://site/mov/123 or /pin [slot] mov 123 or /pin [slot] ser 123"
+            )
+
+        result = await db.pin_trending(media_type, tmdb_id, slot)
+        media = result["media"]
+        await message.reply_text(
+            f"Pinned slot {result['slot']}: {media['title']} ({media['media_type']})"
+        )
+    except Exception as e:
+        await message.reply_text(f"An error occurred: {str(e)}")
+
+
+@Client.on_message(filters.command('unpin') & filters.private & CustomFilters.owner)
+async def unpin_trending(bot: Client, message: Message):
+    try:
+        parts = message.text.split()
+        if len(parts) != 2 or not parts[1].isdigit():
+            return await message.reply_text("Use: /unpin 3")
+
+        slot = int(parts[1])
+        removed = await db.unpin_trending(slot)
+        if removed:
+            await message.reply_text(f"Removed trending slot {slot}.")
+        else:
+            await message.reply_text(f"Slot {slot} is already empty.")
+    except Exception as e:
+        await message.reply_text(f"An error occurred: {str(e)}")
+
+
+@Client.on_message(filters.command('move') & filters.private & CustomFilters.owner)
+async def move_trending(bot: Client, message: Message):
+    try:
+        parts = message.text.split()
+        if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
+            return await message.reply_text("Use: /move 2 5")
+
+        moved = await db.move_trending(int(parts[1]), int(parts[2]))
+        if moved:
+            await message.reply_text(f"Moved trending slot {parts[1]} to {parts[2]}.")
+        else:
+            await message.reply_text(f"Slot {parts[1]} is empty.")
+    except Exception as e:
+        await message.reply_text(f"An error occurred: {str(e)}")
+
+
+@Client.on_message(filters.command('trending') & filters.private & CustomFilters.owner)
+async def list_trending(bot: Client, message: Message):
+    try:
+        data = await db.get_trending()
+        if not data["results"]:
+            return await message.reply_text("Trending is empty. Use /pin [slot] mov 123 or /pin [slot] ser 123.")
+
+        lines = ["Trending slots:"]
+        for item in data["results"]:
+            media_type = "Movie" if item["media_type"] == "movie" else "Series"
+            lines.append(f"{item['trending_slot']}. {item['title']} - {media_type} - {item['tmdb_id']}")
+        await message.reply_text("\n".join(lines))
+    except Exception as e:
+        await message.reply_text(f"An error occurred: {str(e)}")
+
+
 
 
 
