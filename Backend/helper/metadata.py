@@ -13,6 +13,31 @@ DELAY = 2
 
 tmdb = aioTMDb(key=Telegram.TMDB_API, language="en-US", region="US")
 
+
+def pick_youtube_trailer(videos) -> str:
+    results = getattr(videos, "results", None) or []
+    youtube_videos = [
+        video for video in results
+        if getattr(video, "site", "") == "YouTube" and getattr(video, "key", None)
+    ]
+    preferred = next(
+        (
+            video for video in youtube_videos
+            if getattr(video, "official", False)
+            and getattr(video, "type", "") in ("Trailer", "Teaser")
+        ),
+        None,
+    )
+    fallback = next(
+        (
+            video for video in youtube_videos
+            if getattr(video, "type", "") in ("Trailer", "Teaser")
+        ),
+        youtube_videos[0] if youtube_videos else None,
+    )
+    selected = preferred or fallback
+    return f"https://www.youtube.com/embed/{selected.key}?autoplay=1&mute=1&loop=1&playlist={selected.key}&controls=0&playsinline=1" if selected else None
+
 async def metadata(filename: str, media) -> dict:
     try:
         parsed = PTN.parse(filename)
@@ -122,6 +147,11 @@ async def fetch_tv_metadata(title: str, season: int, episode: int, year=None, qu
             genres = [genre.name for genre in tv_details.genres] if tv_details.genres else []
             ep_title = ep_details.name if ep_details and hasattr(ep_details, 'name') else f"S{season}E{episode}"
             ep_backdrop = f"https://image.tmdb.org/t/p/original{ep_details.still_path}" if ep_details and ep_details.still_path else ''
+            try:
+                trailer_url = pick_youtube_trailer(await tmdb.tv(tmdb_id).videos())
+            except Exception as e:
+                LOGGER.warning(f"TV trailer fetch failed for {show_title}: {e}")
+                trailer_url = None
         else:
             tmdb_id = tv_details['id'].replace("tt", "")
             show_title = tv_details.get('title', title)
@@ -137,6 +167,7 @@ async def fetch_tv_metadata(title: str, season: int, episode: int, year=None, qu
             genres = tv_details.get('genre', [])
             ep_title = ep_details.get('title', f"S{season}E{episode}") if ep_details else f"S{season}E{episode}"
             ep_backdrop = ep_details.get('image', '') if ep_details else ''
+            trailer_url = None
             try:
                 await asyncio.sleep(DELAY)
                 fallback_results = await tmdb.search().tv(query=show_title)
@@ -163,6 +194,7 @@ async def fetch_tv_metadata(title: str, season: int, episode: int, year=None, qu
             "total_episodes": total_episodes,
             "poster": poster,
             "backdrop": backdrop,
+            "trailer_url": trailer_url,
             "status": status,
             "genres": genres,
             "media_type": "tv",
@@ -234,6 +266,11 @@ async def fetch_movie_metadata(title: str, year=None, quality=None, default_id=N
             backdrop = f"https://image.tmdb.org/t/p/original{movie_details.backdrop_path}" if movie_details.backdrop_path else ''
             runtime = movie_details.runtime or 0
             genres = [genre.name for genre in movie_details.genres] if movie_details.genres else []
+            try:
+                trailer_url = pick_youtube_trailer(await tmdb.movie(tmdb_id).videos())
+            except Exception as e:
+                LOGGER.warning(f"Movie trailer fetch failed for {movie_title}: {e}")
+                trailer_url = None
         else:
             description = movie_details.get('plot', '')
             tmdb_id = movie_details['id'].replace("tt", "")
@@ -244,6 +281,7 @@ async def fetch_movie_metadata(title: str, year=None, quality=None, default_id=N
             popularity = 0
             runtime = movie_details.get('runtimeSeconds', 0) // 60
             genres = movie_details.get('genre', [])
+            trailer_url = None
             try:
                 force_tmdb_results = await tmdb.search().movies(query=movie_title, year=movie_year)
                 force_movie_id = force_tmdb_results[0].id
@@ -266,6 +304,7 @@ async def fetch_movie_metadata(title: str, year=None, quality=None, default_id=N
             "description": description,
             "poster": poster,
             "backdrop": backdrop,
+            "trailer_url": trailer_url,
             "media_type": "movie",
             "genres": genres,
             "runtime": runtime,

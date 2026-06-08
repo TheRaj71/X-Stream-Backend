@@ -124,6 +124,7 @@ class Database:
             existing_media["rating"] = tv_show_dict["rating"]
             existing_media["vote_count"] = tv_show_dict["vote_count"]
             existing_media["popularity"] = tv_show_dict["popularity"]
+            existing_media["trailer_url"] = tv_show_dict.get("trailer_url") or existing_media.get("trailer_url")
             await self.tv_collection.replace_one(
                 {"tmdb_id": tv_show_dict["tmdb_id"]}, existing_media)
             return existing_media["_id"]
@@ -172,6 +173,7 @@ class Database:
             existing_media["rating"] = movie_dict["rating"]
             existing_media["vote_count"] = movie_dict["vote_count"]
             existing_media["popularity"] = movie_dict["popularity"]
+            existing_media["trailer_url"] = movie_dict.get("trailer_url") or existing_media.get("trailer_url")
             await self.movie_collection.replace_one(
                 {"tmdb_id": movie_dict["tmdb_id"]}, existing_media)
             return existing_media["_id"]
@@ -203,6 +205,7 @@ class Database:
                 release_year=metadata_info['year'],
                 poster=metadata_info['poster'],
                 backdrop=metadata_info['backdrop'],
+                trailer_url=metadata_info.get('trailer_url'),
                 runtime=metadata_info['runtime'],
                 media_type=metadata_info['media_type'],
                 languages=metadata_info['languages'],
@@ -228,6 +231,7 @@ class Database:
                 release_year=metadata_info['year'],
                 poster=metadata_info['poster'],
                 backdrop=metadata_info['backdrop'],
+                trailer_url=metadata_info.get('trailer_url'),
                 media_type=metadata_info['media_type'],
                 status=metadata_info['status'],
                 total_seasons=metadata_info['total_seasons'],
@@ -442,6 +446,7 @@ class Database:
                 "release_year": 1,
                 "poster": 1,
                 "backdrop": 1,
+                "trailer_url": 1,
                 "media_type": 1,
                 "updated_on": 1,
                 "available_files": 1,
@@ -476,6 +481,7 @@ class Database:
                 "release_year": 1,
                 "poster": 1,
                 "backdrop": 1,
+                "trailer_url": 1,
                 "media_type": 1,
                 "updated_on": 1,
                 "total_seasons": 1,
@@ -502,7 +508,12 @@ class Database:
             used_slots = await self.trending_collection.distinct("slot")
             slot = next((item for item in range(1, 11) if item not in used_slots), None)
             if slot is None:
-                raise HTTPException(status_code=400, detail="All 10 trending slots are full")
+                oldest_pin = await self.trending_collection.find_one({}, sort=[("pinned_on", ASCENDING)])
+                if not oldest_pin:
+                    slot = 1
+                else:
+                    slot = oldest_pin["slot"]
+                    await self.trending_collection.delete_one({"_id": oldest_pin["_id"]})
 
         if slot < 1 or slot > 10:
             raise HTTPException(status_code=400, detail="Trending slot must be between 1 and 10")
