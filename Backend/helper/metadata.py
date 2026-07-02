@@ -107,7 +107,7 @@ def pick_youtube_trailer(videos) -> str:
         youtube_videos[0] if youtube_videos else None,
     )
     selected = preferred or fallback
-    return f"https://www.youtube.com/embed/{selected.key}?autoplay=1&mute=1&loop=1&playlist={selected.key}&controls=0&playsinline=1" if selected else None
+    return f"https://www.youtube.com/embed/{selected.key}?autoplay=1&mute=0&loop=1&playlist={selected.key}&controls=0&playsinline=1" if selected else None
 
 
 def format_cast(credits, limit: int = 10) -> list:
@@ -121,6 +121,41 @@ def format_cast(credits, limit: int = 10) -> list:
             "character": getattr(member, "character", "") or "",
             "profile": f"https://image.tmdb.org/t/p/w185{profile_path}" if profile_path else "",
         })
+    return formatted
+
+
+def _provider_value(provider, key: str, default=None):
+    if isinstance(provider, dict):
+        return provider.get(key, default)
+    return getattr(provider, key, default)
+
+
+def format_watch_providers(provider_response, region: str = "IN", limit: int = 8) -> list:
+    results = _provider_value(provider_response, "results", {}) or {}
+    region_data = results.get(region) or results.get(region.upper()) if isinstance(results, dict) else None
+    if not region_data:
+        return []
+
+    formatted = []
+    seen = set()
+    for provider_type in ("flatrate", "free", "ads", "rent", "buy"):
+        providers = _provider_value(region_data, provider_type, []) or []
+        for provider in providers:
+            provider_id = _provider_value(provider, "provider_id")
+            provider_name = _provider_value(provider, "provider_name")
+            logo_path = _provider_value(provider, "logo_path")
+            if not provider_id or provider_id in seen:
+                continue
+            seen.add(provider_id)
+            formatted.append({
+                "provider_id": provider_id,
+                "name": provider_name,
+                "logo": tmdb_image(logo_path, "w92"),
+                "type": provider_type,
+                "region": region,
+            })
+            if len(formatted) >= limit:
+                return formatted
     return formatted
 
 async def metadata(filename: str, media) -> dict:
@@ -250,6 +285,11 @@ async def fetch_tv_metadata(title: str, season: int, episode: int, year=None, qu
             except Exception as e:
                 LOGGER.warning(f"TV cast fetch failed for {show_title}: {e}")
                 cast = []
+            try:
+                watch_providers = format_watch_providers(await tmdb.tv(tmdb_id).watch_providers())
+            except Exception as e:
+                LOGGER.warning(f"TV watch provider fetch failed for {show_title}: {e}")
+                watch_providers = []
         else:
             tmdb_id = tv_details['id'].replace("tt", "")
             show_title = tv_details.get('title', title)
@@ -267,6 +307,7 @@ async def fetch_tv_metadata(title: str, season: int, episode: int, year=None, qu
             ep_backdrop = ep_details.get('image', '') if ep_details else ''
             trailer_url = None
             cast = []
+            watch_providers = []
             try:
                 await asyncio.sleep(DELAY)
                 fallback_results = await tmdb.search().tv(query=show_title)
@@ -295,6 +336,7 @@ async def fetch_tv_metadata(title: str, season: int, episode: int, year=None, qu
             "backdrop": backdrop,
             "trailer_url": trailer_url,
             "cast": cast,
+            "watch_providers": watch_providers,
             "status": status,
             "genres": genres,
             "media_type": "tv",
@@ -400,6 +442,11 @@ async def fetch_tv_pack_metadata(title: str, pack_info: dict, year=None, quality
         except Exception as e:
             LOGGER.warning(f"TV cast fetch failed for pack {tv_details.name}: {e}")
             cast = []
+        try:
+            watch_providers = format_watch_providers(await tmdb.tv(tv_details.id).watch_providers())
+        except Exception as e:
+            LOGGER.warning(f"TV watch provider fetch failed for pack {tv_details.name}: {e}")
+            watch_providers = []
 
         result = {
             "tmdb_id": tv_details.id,
@@ -415,6 +462,7 @@ async def fetch_tv_pack_metadata(title: str, pack_info: dict, year=None, quality
             "backdrop": tmdb_image(getattr(tv_details, "backdrop_path", None)),
             "trailer_url": trailer_url,
             "cast": cast,
+            "watch_providers": watch_providers,
             "status": tv_details.status or 'Unknown',
             "genres": [genre.name for genre in tv_details.genres] if tv_details.genres else [],
             "media_type": "tv",
@@ -503,6 +551,11 @@ async def fetch_movie_metadata(title: str, year=None, quality=None, default_id=N
             except Exception as e:
                 LOGGER.warning(f"Movie cast fetch failed for {movie_title}: {e}")
                 cast = []
+            try:
+                watch_providers = format_watch_providers(await tmdb.movie(tmdb_id).watch_providers())
+            except Exception as e:
+                LOGGER.warning(f"Movie watch provider fetch failed for {movie_title}: {e}")
+                watch_providers = []
         else:
             description = movie_details.get('plot', '')
             tmdb_id = movie_details['id'].replace("tt", "")
@@ -515,6 +568,7 @@ async def fetch_movie_metadata(title: str, year=None, quality=None, default_id=N
             genres = movie_details.get('genre', [])
             trailer_url = None
             cast = []
+            watch_providers = []
             try:
                 force_tmdb_results = await tmdb.search().movies(query=movie_title, year=movie_year)
                 force_movie_id = force_tmdb_results[0].id
@@ -539,6 +593,7 @@ async def fetch_movie_metadata(title: str, year=None, quality=None, default_id=N
             "backdrop": backdrop,
             "trailer_url": trailer_url,
             "cast": cast,
+            "watch_providers": watch_providers,
             "media_type": "movie",
             "genres": genres,
             "runtime": runtime,

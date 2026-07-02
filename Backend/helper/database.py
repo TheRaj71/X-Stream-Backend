@@ -160,6 +160,7 @@ class Database:
             existing_media["popularity"] = tv_show_dict["popularity"]
             existing_media["trailer_url"] = tv_show_dict.get("trailer_url") or existing_media.get("trailer_url")
             existing_media["cast"] = tv_show_dict.get("cast") or existing_media.get("cast", [])
+            existing_media["watch_providers"] = tv_show_dict.get("watch_providers") or existing_media.get("watch_providers", [])
             await self.tv_collection.replace_one(
                 {"tmdb_id": tv_show_dict["tmdb_id"]}, existing_media)
             return existing_media["_id"]
@@ -210,6 +211,7 @@ class Database:
             existing_media["popularity"] = movie_dict["popularity"]
             existing_media["trailer_url"] = movie_dict.get("trailer_url") or existing_media.get("trailer_url")
             existing_media["cast"] = movie_dict.get("cast") or existing_media.get("cast", [])
+            existing_media["watch_providers"] = movie_dict.get("watch_providers") or existing_media.get("watch_providers", [])
             await self.movie_collection.replace_one(
                 {"tmdb_id": movie_dict["tmdb_id"]}, existing_media)
             return existing_media["_id"]
@@ -243,6 +245,7 @@ class Database:
                 backdrop=metadata_info['backdrop'],
                 trailer_url=metadata_info.get('trailer_url'),
                 cast=metadata_info.get('cast', []),
+                watch_providers=metadata_info.get('watch_providers', []),
                 runtime=metadata_info['runtime'],
                 media_type=metadata_info['media_type'],
                 languages=metadata_info['languages'],
@@ -307,6 +310,7 @@ class Database:
                 backdrop=metadata_info['backdrop'],
                 trailer_url=metadata_info.get('trailer_url'),
                 cast=metadata_info.get('cast', []),
+                watch_providers=metadata_info.get('watch_providers', []),
                 media_type=metadata_info['media_type'],
                 status=metadata_info['status'],
                 total_seasons=metadata_info['total_seasons'],
@@ -517,6 +521,7 @@ class Database:
                 "backdrop": 1,
                 "trailer_url": 1,
                 "cast": 1,
+                "watch_providers": 1,
                 "media_type": 1,
                 "updated_on": 1,
                 "available_files": 1,
@@ -553,6 +558,7 @@ class Database:
                 "backdrop": 1,
                 "trailer_url": 1,
                 "cast": 1,
+                "watch_providers": 1,
                 "media_type": 1,
                 "updated_on": 1,
                 "total_seasons": 1,
