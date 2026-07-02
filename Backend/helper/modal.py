@@ -14,9 +14,28 @@ class Episode(BaseModel):
     episode_backdrop: str = Field(..., description="Backdrop of Episode")
     telegram: Optional[List[QualityDetail]] = Field(None, description="List of available quality details")
 
+class EpisodeInPack(BaseModel):
+    episode_number: int = Field(..., description="Episode number included in the pack")
+    title: str = Field(..., description="Title of the episode")
+    overview: str = Field(default="", description="Episode overview")
+    episode_backdrop: str = Field(default="", description="Backdrop of Episode")
+    runtime: Optional[int] = Field(default=None, description="Episode runtime")
+
+class EpisodePack(BaseModel):
+    pack_id: str = Field(..., description="Stable identifier for the combined file pack")
+    kind: str = Field(..., description="Pack kind, for example season_pack or episode_range")
+    title: str = Field(..., description="Display title for the pack")
+    episode_start: Optional[int] = Field(default=None, description="First episode in the pack")
+    episode_end: Optional[int] = Field(default=None, description="Last episode in the pack")
+    episode_numbers: List[int] = Field(default_factory=list, description="Episodes included in the pack")
+    episodes: List[EpisodeInPack] = Field(default_factory=list, description="Episode metadata included in the pack")
+    backdrop: str = Field(default="", description="Representative pack backdrop")
+    telegram: Optional[List[QualityDetail]] = Field(None, description="List of available quality details")
+
 class Season(BaseModel):
     season_number: int = Field(..., description="Season number within the TV show")
     episodes: List[Episode] = Field(..., description="List of episodes in the season")
+    packs: List[EpisodePack] = Field(default_factory=list, description="Combined season or episode range files")
 
 class TVShowSchema(BaseModel):
     tmdb_id: int = Field(..., description="The TMDB ID of the TV show")

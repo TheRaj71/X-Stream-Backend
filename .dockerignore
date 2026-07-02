@@ -1,6 +1,8 @@
 .git
 .venv
 .venv-wsl
+.venv-*
+dist/
 config.env
 __pycache__/
 **/__pycache__/

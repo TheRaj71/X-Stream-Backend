@@ -1,4 +1,5 @@
 import asyncio
+import re
 import PTN
 from Backend.helper.imdb import get_detail, get_season, search_title
 from Backend.helper.pyro import extract_tmdb_id, normalize_languages
@@ -12,6 +13,76 @@ import traceback
 DELAY = 2
 
 tmdb = aioTMDb(key=Telegram.TMDB_API, language="en-US", region="US")
+
+
+def detect_episode_pack(filename: str, parsed: dict) -> dict:
+    name = filename.replace(".", " ").replace("_", " ")
+    lower_name = name.lower()
+    season = parsed.get("season")
+    episode = parsed.get("episode")
+
+    range_patterns = [
+        r"\bs(?:eason)?\s*0*(\d{1,2})\s*e(?:p(?:isode)?)?\s*0*(\d{1,3})\s*(?:-|–|—|~|\bto\b)\s*(?:e(?:p(?:isode)?)?)?\s*0*(\d{1,3})\b",
+        r"\bs(?:eason)?\s*0*(\d{1,2})\s*[\[\(\{]\s*0*(\d{1,3})\s*(?:-|–|—|~|\bto\b)\s*0*(\d{1,3})\s*[\]\)\}]",
+        r"\bseason\s*0*(\d{1,2}).*?\b(?:ep|episode|episodes)\s*0*(\d{1,3})\s*(?:-|–|—|~|\bto\b)\s*0*(\d{1,3})\b",
+    ]
+
+    for pattern in range_patterns:
+        match = re.search(pattern, lower_name, flags=re.IGNORECASE)
+        if not match:
+            continue
+        season_number, start, end = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        if end < start:
+            start, end = end, start
+        episode_numbers = list(range(start, end + 1))
+        return {
+            "kind": "episode_range",
+            "season_number": season_number,
+            "episode_start": start,
+            "episode_end": end,
+            "episode_numbers": episode_numbers,
+            "pack_id": f"s{season_number:02d}e{start:02d}-e{end:02d}",
+            "title": f"Episodes {start}-{end}",
+        }
+
+    if isinstance(episode, list) and season:
+        episode_numbers = sorted({int(item) for item in episode if str(item).isdigit()})
+        if episode_numbers:
+            start, end = episode_numbers[0], episode_numbers[-1]
+            return {
+                "kind": "episode_range",
+                "season_number": int(season),
+                "episode_start": start,
+                "episode_end": end,
+                "episode_numbers": episode_numbers,
+                "pack_id": f"s{int(season):02d}e{start:02d}-e{end:02d}",
+                "title": f"Episodes {start}-{end}",
+            }
+
+    season_pack_keywords = (
+        "combined",
+        "complete",
+        "complete season",
+        "season pack",
+        "full season",
+        "all episodes",
+        "batch",
+    )
+    has_pack_keyword = any(keyword in lower_name for keyword in season_pack_keywords)
+    season_match = re.search(r"\bs(?:eason)?\s*0*(\d{1,2})\b", lower_name, flags=re.IGNORECASE)
+    if has_pack_keyword and (season or season_match) and not episode:
+        season_number = int(season if season else season_match.group(1))
+        return {
+            "kind": "season_pack",
+            "season_number": season_number,
+            "episode_start": None,
+            "episode_end": None,
+            "episode_numbers": [],
+            "pack_id": f"s{season_number:02d}-complete",
+            "title": f"Season {season_number} Complete",
+        }
+
+    return None
 
 
 def pick_youtube_trailer(videos) -> str:
@@ -55,9 +126,6 @@ def format_cast(credits, limit: int = 10) -> list:
 async def metadata(filename: str, media) -> dict:
     try:
         parsed = PTN.parse(filename)
-        if 'excess' in parsed and any('combined' in item.lower() for item in parsed['excess']):
-            LOGGER.info(f"Skipping {filename} due to 'combined' in excess")
-            return None
 
         title = parsed.get('title')
         season = parsed.get('season')
@@ -66,12 +134,17 @@ async def metadata(filename: str, media) -> dict:
         quality = parsed.get('resolution')
         languages = normalize_languages(parsed.get('language'))
         rip = parsed.get('quality')
+        pack_info = detect_episode_pack(filename, parsed)
 
-        if isinstance(season, list) or isinstance(episode, list):
-            LOGGER.warning(f"Invalid format: Season/Episode is list — {filename}, parsed: {parsed}")
+        if isinstance(season, list):
+            LOGGER.warning(f"Invalid format: Season is list — {filename}, parsed: {parsed}")
             return None
 
-        if season and not episode:
+        if isinstance(episode, list) and not pack_info:
+            LOGGER.warning(f"Invalid format: Episode is list without detectable pack — {filename}, parsed: {parsed}")
+            return None
+
+        if season and not episode and not pack_info:
             LOGGER.warning(f"Missing episode for season: {filename}, parsed: {parsed}")
             return None
 
@@ -89,7 +162,13 @@ async def metadata(filename: str, media) -> dict:
                 default_id = None
 
         if title:
-            if season and episode:
+            if pack_info:
+                LOGGER.info(
+                    "Fetching TV metadata for pack: "
+                    f"{title} S{pack_info['season_number']} {pack_info['pack_id']}"
+                )
+                return await fetch_tv_pack_metadata(title, pack_info, year, quality, default_id, languages, rip)
+            elif season and episode:
                 LOGGER.info(f"Fetching TV metadata for: {title} S{season}E{episode}")
                 return await fetch_tv_metadata(title, season, episode, year, quality, default_id, languages, rip)
             else:
@@ -233,6 +312,133 @@ async def fetch_tv_metadata(title: str, season: int, episode: int, year=None, qu
 
     except Exception as e:
         LOGGER.error(f"Error fetching TV metadata for '{title}' S{season}E{episode}: {e}", exc_info=True)
+        return None
+
+
+def tmdb_image(path: str, size: str = "original") -> str:
+    return f"https://image.tmdb.org/t/p/{size}{path}" if path else ''
+
+
+def format_pack_episode(ep_details, episode_number: int) -> dict:
+    return {
+        "episode_number": episode_number,
+        "title": getattr(ep_details, "name", None) or f"Episode {episode_number}",
+        "overview": getattr(ep_details, "overview", "") or "",
+        "episode_backdrop": tmdb_image(getattr(ep_details, "still_path", None)),
+        "runtime": getattr(ep_details, "runtime", None),
+    }
+
+
+async def fetch_tv_pack_metadata(title: str, pack_info: dict, year=None, quality=None, default_id=None, languages=None, rip=None) -> dict:
+    try:
+        if not Telegram.USE_TMDB:
+            LOGGER.info("TV packs use TMDb episode data for reliable range/season metadata")
+
+        await asyncio.sleep(DELAY)
+        tmdb_results = await tmdb.search().tv(query=title)
+        if not tmdb_results:
+            LOGGER.warning(f"No TMDb results found for pack title '{title}'")
+            return None
+
+        tv_id = tmdb_results[0].id
+        LOGGER.debug(f"TMDb ID found for pack: {tv_id}")
+        tv_details = await tmdb.tv(tv_id).details()
+        season_number = int(pack_info["season_number"])
+        episode_numbers = pack_info.get("episode_numbers") or []
+        pack_episodes = []
+
+        if pack_info["kind"] == "season_pack":
+            season_details = await tmdb.season(tv_id, season_number).details()
+            season_episodes = getattr(season_details, "episodes", None) or []
+            episode_numbers = [
+                int(getattr(ep, "episode_number"))
+                for ep in season_episodes
+                if getattr(ep, "episode_number", None)
+            ]
+            pack_episodes = [
+                format_pack_episode(ep, int(getattr(ep, "episode_number")))
+                for ep in season_episodes
+                if getattr(ep, "episode_number", None)
+            ]
+        else:
+            for episode_number in episode_numbers:
+                try:
+                    ep_details = await tmdb.episode(tv_id, season_number, episode_number).details()
+                    pack_episodes.append(format_pack_episode(ep_details, episode_number))
+                except Exception as e:
+                    LOGGER.warning(f"Episode detail fetch failed for {title} S{season_number}E{episode_number}: {e}")
+                    pack_episodes.append({
+                        "episode_number": episode_number,
+                        "title": f"Episode {episode_number}",
+                        "overview": "",
+                        "episode_backdrop": "",
+                        "runtime": None,
+                    })
+
+        representative_backdrop = next(
+            (episode["episode_backdrop"] for episode in pack_episodes if episode.get("episode_backdrop")),
+            tmdb_image(getattr(tv_details, "backdrop_path", None)),
+        )
+
+        if pack_info["kind"] == "season_pack":
+            pack_title = f"Season {season_number} Complete"
+        else:
+            start = pack_info.get("episode_start")
+            end = pack_info.get("episode_end")
+            start_title = next((ep["title"] for ep in pack_episodes if ep["episode_number"] == start), "")
+            end_title = next((ep["title"] for ep in pack_episodes if ep["episode_number"] == end), "")
+            title_suffix = f": {start_title} - {end_title}" if start_title and end_title and start_title != end_title else ""
+            pack_title = f"Episodes {start}-{end}{title_suffix}"
+
+        try:
+            trailer_url = pick_youtube_trailer(await tmdb.tv(tv_details.id).videos())
+        except Exception as e:
+            LOGGER.warning(f"TV trailer fetch failed for pack {tv_details.name}: {e}")
+            trailer_url = None
+        try:
+            cast = format_cast(await tmdb.tv(tv_details.id).credits())
+        except Exception as e:
+            LOGGER.warning(f"TV cast fetch failed for pack {tv_details.name}: {e}")
+            cast = []
+
+        result = {
+            "tmdb_id": tv_details.id,
+            "title": tv_details.name,
+            "year": tv_details.first_air_date.year if tv_details.first_air_date else 0,
+            "rate": tv_details.vote_average or 0,
+            "vote_count": getattr(tv_details, "vote_count", 0) or 0,
+            "popularity": getattr(tv_details, "popularity", 0) or 0,
+            "description": tv_details.overview or '',
+            "total_seasons": tv_details.number_of_seasons or 0,
+            "total_episodes": tv_details.number_of_episodes or 0,
+            "poster": tmdb_image(getattr(tv_details, "poster_path", None), "w500"),
+            "backdrop": tmdb_image(getattr(tv_details, "backdrop_path", None)),
+            "trailer_url": trailer_url,
+            "cast": cast,
+            "status": tv_details.status or 'Unknown',
+            "genres": [genre.name for genre in tv_details.genres] if tv_details.genres else [],
+            "media_type": "tv",
+            "season_number": season_number,
+            "pack": {
+                "pack_id": pack_info["pack_id"],
+                "kind": pack_info["kind"],
+                "title": pack_title,
+                "episode_start": pack_info.get("episode_start"),
+                "episode_end": pack_info.get("episode_end"),
+                "episode_numbers": episode_numbers,
+                "episodes": pack_episodes,
+                "backdrop": representative_backdrop,
+            },
+            "quality": quality,
+            "languages": languages or ['hi'],
+            "rip": rip or 'Blu-ray'
+        }
+
+        LOGGER.info(f"Pack metadata successfully fetched for {tv_details.name} {pack_info['pack_id']}")
+        return result
+
+    except Exception as e:
+        LOGGER.error(f"Error fetching TV pack metadata for '{title}': {e}", exc_info=True)
         return None
 
 

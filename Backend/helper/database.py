@@ -9,7 +9,7 @@ from pymongo import ASCENDING, DESCENDING
 from Backend.logger import LOGGER
 from Backend.config import Telegram
 from Backend.helper.encrypt import encode_string
-from Backend.helper.modal import Episode, MovieSchema, QualityDetail, Season, TVShowSchema
+from Backend.helper.modal import Episode, EpisodePack, MovieSchema, QualityDetail, Season, TVShowSchema
 
 
 class Database:
@@ -88,11 +88,15 @@ class Database:
 
         updated = False
         for season in tv_show_dict["seasons"]:
+            season.setdefault("episodes", [])
+            season.setdefault("packs", [])
             existing_season = next(
                 (s for s in existing_media["seasons"]
                  if s["season_number"] == season["season_number"]), None)
 
             if existing_season:
+                existing_season.setdefault("episodes", [])
+                existing_season.setdefault("packs", [])
                 for episode in season["episodes"]:
                     existing_episode = next(
                         (e for e in existing_season["episodes"]
@@ -112,6 +116,36 @@ class Database:
                                 updated = True
                     else:
                         existing_season["episodes"].append(episode)
+                        updated = True
+
+                for pack in season.get("packs", []):
+                    existing_pack = next(
+                        (p for p in existing_season["packs"]
+                         if p["pack_id"] == pack["pack_id"]), None)
+
+                    if existing_pack:
+                        existing_pack.update({
+                            "kind": pack.get("kind", existing_pack.get("kind")),
+                            "title": pack.get("title", existing_pack.get("title")),
+                            "episode_start": pack.get("episode_start", existing_pack.get("episode_start")),
+                            "episode_end": pack.get("episode_end", existing_pack.get("episode_end")),
+                            "episode_numbers": pack.get("episode_numbers", existing_pack.get("episode_numbers", [])),
+                            "episodes": pack.get("episodes", existing_pack.get("episodes", [])),
+                            "backdrop": pack.get("backdrop", existing_pack.get("backdrop", "")),
+                        })
+                        existing_pack.setdefault("telegram", [])
+                        for quality in pack.get("telegram") or []:
+                            existing_quality = next(
+                                (q for q in existing_pack["telegram"]
+                                 if q["quality"] == quality["quality"]), None)
+
+                            if existing_quality:
+                                existing_quality.update(quality)
+                            else:
+                                existing_pack["telegram"].append(quality)
+                            updated = True
+                    else:
+                        existing_season["packs"].append(pack)
                         updated = True
             else:
                 existing_media["seasons"].append(season)
@@ -223,6 +257,43 @@ class Database:
             )
             return await self.update_movie(media)
         else:
+            telegram_quality = QualityDetail(
+                quality=metadata_info['quality'],
+                id=encoded_string,
+                name=name,
+                size=size
+            )
+            season_payload = Season(
+                season_number=metadata_info['season_number'],
+                episodes=[],
+                packs=[]
+            )
+
+            if metadata_info.get("pack"):
+                pack = metadata_info["pack"]
+                season_payload.packs.append(
+                    EpisodePack(
+                        pack_id=pack["pack_id"],
+                        kind=pack["kind"],
+                        title=pack["title"],
+                        episode_start=pack.get("episode_start"),
+                        episode_end=pack.get("episode_end"),
+                        episode_numbers=pack.get("episode_numbers", []),
+                        episodes=pack.get("episodes", []),
+                        backdrop=pack.get("backdrop", ""),
+                        telegram=[telegram_quality]
+                    )
+                )
+            else:
+                season_payload.episodes.append(
+                    Episode(
+                        episode_number=metadata_info['episode_number'],
+                        title=metadata_info['episode_title'],
+                        episode_backdrop=metadata_info['episode_backdrop'],
+                        telegram=[telegram_quality]
+                    )
+                )
+
             tv_show = TVShowSchema(
                 tmdb_id=metadata_info['tmdb_id'],
                 title=metadata_info['title'],
@@ -242,26 +313,7 @@ class Database:
                 total_episodes=metadata_info['total_episodes'],
                 languages=metadata_info['languages'],
                 rip=metadata_info['rip'],
-                seasons=[
-                    Season(
-                        season_number=metadata_info['season_number'],
-                        episodes=[
-                            Episode(
-                                episode_number=metadata_info['episode_number'],
-                                title=metadata_info['episode_title'],
-                                episode_backdrop=metadata_info['episode_backdrop'],
-                                telegram=[
-                                    QualityDetail(
-                                        quality=metadata_info['quality'],
-                                        id=encoded_string,
-                                        name=name,
-                                        size=size
-                                    )
-                                ]
-                            )
-                        ]
-                    )
-                ]
+                seasons=[season_payload]
             )
             return await self.update_tv_show(tv_show)
 
@@ -407,13 +459,26 @@ class Database:
                         "input": {"$ifNull": ["$seasons", []]},
                         "as": "season",
                         "in": {
-                            "$sum": {
-                                "$map": {
-                                    "input": {"$ifNull": ["$$season.episodes", []]},
-                                    "as": "episode",
-                                    "in": {"$size": {"$ifNull": ["$$episode.telegram", []]}},
+                            "$add": [
+                                {
+                                    "$sum": {
+                                        "$map": {
+                                            "input": {"$ifNull": ["$$season.episodes", []]},
+                                            "as": "episode",
+                                            "in": {"$size": {"$ifNull": ["$$episode.telegram", []]}},
+                                        }
+                                    }
+                                },
+                                {
+                                    "$sum": {
+                                        "$map": {
+                                            "input": {"$ifNull": ["$$season.packs", []]},
+                                            "as": "pack",
+                                            "in": {"$size": {"$ifNull": ["$$pack.telegram", []]}},
+                                        }
+                                    }
                                 }
-                            }
+                            ]
                         },
                     }
                 }
@@ -628,7 +693,9 @@ class Database:
         tv_pipeline = [
             {"$match": {"$or": [
                 {"title": regex_query},
-                {"seasons.episodes.telegram.name": regex_query}
+                {"seasons.episodes.telegram.name": regex_query},
+                {"seasons.packs.telegram.name": regex_query},
+                {"seasons.packs.title": regex_query},
             ]}},
             {"$project": {
                 "_id": 1, "tmdb_id": 1, "title": 1, "genres": 1, "rating": 1,
@@ -689,6 +756,19 @@ class Database:
                 return None
             for season in tv_show.get("seasons", []):
                 if season.get("season_number") == season_number:
+                    season["episodes"] = sorted(
+                        season.get("episodes", []),
+                        key=lambda episode: episode.get("episode_number", 0),
+                    )
+                    season["packs"] = sorted(
+                        season.get("packs", []),
+                        key=lambda pack: (
+                            pack.get("episode_start") is None,
+                            pack.get("episode_start") or 0,
+                            pack.get("episode_end") or 0,
+                            pack.get("pack_id", ""),
+                        ),
+                    )
                     details = self._convert_object_id(season)
                     details.update({
                         "tmdb_id": tmdb_id,
