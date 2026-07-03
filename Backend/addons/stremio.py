@@ -1,3 +1,5 @@
+from math import floor
+from re import escape
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote, unquote_plus
 
@@ -13,7 +15,63 @@ ADDON_ID = "org.xstream.backend"
 ADDON_NAME = "X-Stream"
 CATALOG_MOVIES = "xstream-movies"
 CATALOG_SERIES = "xstream-series"
-CATALOG_NAME = "X-Stream"
+PAGE_SIZE = 50
+GENRE_OPTIONS = [
+    "Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary",
+    "Drama", "Family", "Fantasy", "History", "Horror", "Mystery",
+    "Romance", "Science Fiction", "Thriller", "War", "Western",
+]
+LANGUAGE_CATALOGS = {
+    "xstream-hindi": "Hindi",
+    "xstream-english": "English",
+    "xstream-tamil": "Tamil",
+    "xstream-telugu": "Telugu",
+}
+QUALITY_CATALOGS = {
+    "xstream-4k": ("2160p|4k|uhd", "4K Picks"),
+    "xstream-1080p": ("1080p", "Full HD Picks"),
+}
+CATALOGS = {
+    CATALOG_MOVIES: {"type": "movie", "name": "Latest Movies", "source": "sort", "sort": [("updated_on", "desc")]},
+    CATALOG_SERIES: {"type": "series", "name": "Latest Series", "source": "sort", "sort": [("updated_on", "desc")]},
+    "xstream-trending-movies": {"type": "movie", "name": "Trending Movies", "source": "trending"},
+    "xstream-trending-series": {"type": "series", "name": "Trending Series", "source": "trending"},
+    "xstream-editors-movies": {"type": "movie", "name": "Editors Choice Movies", "source": "editors"},
+    "xstream-editors-series": {"type": "series", "name": "Editors Choice Series", "source": "editors"},
+    "xstream-top-movies": {"type": "movie", "name": "Top Rated Movies", "source": "sort", "sort": [("rating", "desc"), ("vote_count", "desc")]},
+    "xstream-top-series": {"type": "series", "name": "Top Rated Series", "source": "sort", "sort": [("rating", "desc"), ("vote_count", "desc")]},
+    "xstream-popular-movies": {"type": "movie", "name": "Popular Movies", "source": "sort", "sort": [("popularity", "desc"), ("rating", "desc")]},
+    "xstream-popular-series": {"type": "series", "name": "Popular Series", "source": "sort", "sort": [("popularity", "desc"), ("rating", "desc")]},
+    "xstream-season-packs": {"type": "series", "name": "Season Packs", "source": "season_packs"},
+}
+
+for catalog_id, language in LANGUAGE_CATALOGS.items():
+    CATALOGS[f"{catalog_id}-movies"] = {
+        "type": "movie",
+        "name": f"{language} Movies",
+        "source": "language",
+        "language": language,
+    }
+    CATALOGS[f"{catalog_id}-series"] = {
+        "type": "series",
+        "name": f"{language} Series",
+        "source": "language",
+        "language": language,
+    }
+
+for catalog_id, (quality, name) in QUALITY_CATALOGS.items():
+    CATALOGS[f"{catalog_id}-movies"] = {
+        "type": "movie",
+        "name": f"{name} Movies",
+        "source": "quality",
+        "quality": quality,
+    }
+    CATALOGS[f"{catalog_id}-series"] = {
+        "type": "series",
+        "name": f"{name} Series",
+        "source": "quality",
+        "quality": quality,
+    }
 
 
 def _as_dict(value: Any) -> Dict[str, Any]:
@@ -46,6 +104,44 @@ def _parse_extra(extra: Optional[str]) -> Dict[str, str]:
     return parsed
 
 
+def _extra_int(params: Dict[str, str], name: str, default: int = 0) -> int:
+    try:
+        return max(int(params.get(name, default)), 0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _page_from_skip(skip: int) -> int:
+    return floor(skip / PAGE_SIZE) + 1
+
+
+def _genre_from_params(params: Dict[str, str]) -> Optional[str]:
+    genre = params.get("genre")
+    return genre.strip() if genre and genre.strip() else None
+
+
+def _matches_genre(document: Dict[str, Any], genre: Optional[str]) -> bool:
+    if not genre:
+        return True
+    return genre.lower() in {str(item).lower() for item in document.get("genres") or []}
+
+
+def _quality_regex(quality: str) -> Dict[str, str]:
+    return {"$regex": quality, "$options": "i"}
+
+
+def _exact_text_regex(value: str) -> Dict[str, str]:
+    return {"$regex": f"^{escape(value)}$", "$options": "i"}
+
+
+def _catalog_extra() -> List[Dict[str, Any]]:
+    return [
+        {"name": "search", "isRequired": False},
+        {"name": "genre", "isRequired": False, "options": GENRE_OPTIONS},
+        {"name": "skip", "isRequired": False},
+    ]
+
+
 def _parse_stremio_id(stremio_id: str) -> Tuple[int, Optional[int], Optional[int]]:
     parts = stremio_id.split(":")
     if len(parts) < 2 or parts[0] != "tmdb":
@@ -64,6 +160,18 @@ def _parse_stremio_id(stremio_id: str) -> Tuple[int, Optional[int], Optional[int
 def _stremio_type(document: Dict[str, Any]) -> str:
     media_type = document.get("media_type") or document.get("type")
     return "movie" if media_type == "movie" else "series"
+
+
+def _backend_media_type(content_type: str) -> str:
+    return "movie" if content_type == "movie" else "tvshow"
+
+
+def _result_key(content_type: str) -> str:
+    return "movies" if content_type == "movie" else "tv_shows"
+
+
+def _mongo_sort(sort_params: List[Tuple[str, str]]) -> List[Tuple[str, int]]:
+    return [(field, -1 if direction == "desc" else 1) for field, direction in sort_params]
 
 
 def _preview_meta(document: Dict[str, Any]) -> Dict[str, Any]:
@@ -248,6 +356,16 @@ def _pack_contains_episode(pack: Dict[str, Any], episode_number: int) -> bool:
 
 @router.get("/manifest.json")
 async def manifest() -> Dict[str, Any]:
+    catalogs = [
+        {
+            "type": definition["type"],
+            "id": catalog_id,
+            "name": definition["name"],
+            "extra": _catalog_extra(),
+        }
+        for catalog_id, definition in CATALOGS.items()
+    ]
+
     return {
         "id": ADDON_ID,
         "version": __version__,
@@ -255,20 +373,7 @@ async def manifest() -> Dict[str, Any]:
         "description": "Stream your X-Stream backend library in Stremio-compatible clients.",
         "resources": ["catalog", "meta", "stream"],
         "types": ["movie", "series"],
-        "catalogs": [
-            {
-                "type": "movie",
-                "id": CATALOG_MOVIES,
-                "name": CATALOG_NAME,
-                "extra": [{"name": "search", "isRequired": False}],
-            },
-            {
-                "type": "series",
-                "id": CATALOG_SERIES,
-                "name": CATALOG_NAME,
-                "extra": [{"name": "search", "isRequired": False}],
-            },
-        ],
+        "catalogs": catalogs,
         "idPrefixes": ["tmdb:"],
         "behaviorHints": {"configurable": False},
     }
@@ -278,29 +383,142 @@ async def manifest() -> Dict[str, Any]:
 @router.get("/catalog/{content_type}/{catalog_id}/{extra}.json")
 async def catalog(content_type: str, catalog_id: str, extra: Optional[str] = None) -> Dict[str, Any]:
     params = _parse_extra(extra)
-    search = params.get("search")
+    catalog_definition = CATALOGS.get(catalog_id)
 
-    if content_type not in ("movie", "series"):
+    if content_type not in ("movie", "series") or not catalog_definition:
         return {"metas": []}
 
+    if catalog_definition["type"] != content_type:
+        return {"metas": []}
+
+    items = await _catalog_items(content_type, catalog_definition, params)
+    return {"metas": [_preview_meta(item) for item in items]}
+
+
+async def _catalog_items(content_type: str, catalog_definition: Dict[str, Any], params: Dict[str, str]) -> List[Dict[str, Any]]:
+    search = params.get("search")
+    genre = _genre_from_params(params)
+    skip = _extra_int(params, "skip", 0)
+    page = _page_from_skip(skip)
+
     if search:
-        results = await db.search_documents(query=search, page=1, page_size=50)
-        metas = [
-            _preview_meta(item)
-            for item in results.get("results", [])
-            if _stremio_type(item) == content_type
+        results = await db.search_documents(query=search, page=page, page_size=PAGE_SIZE)
+        return [
+            item for item in results.get("results", [])
+            if _stremio_type(item) == content_type and _matches_genre(item, genre)
         ]
-        return {"metas": metas}
 
-    if content_type == "movie" and catalog_id == CATALOG_MOVIES:
-        results = await db.sort_movies([("updated_on", "desc")], page=1, page_size=50)
-        return {"metas": [_preview_meta(item) for item in _clean_items(results.get("movies", []))]}
+    source = catalog_definition["source"]
 
-    if content_type == "series" and catalog_id == CATALOG_SERIES:
-        results = await db.sort_tv_shows([("updated_on", "desc")], page=1, page_size=50)
-        return {"metas": [_preview_meta(item) for item in _clean_items(results.get("tv_shows", []))]}
+    if source == "sort":
+        return await _sorted_items(content_type, catalog_definition["sort"], page, genre)
 
-    return {"metas": []}
+    if source == "editors":
+        return await _editors_choice_items(content_type, page, genre)
+
+    if source == "trending":
+        return await _trending_items(content_type, skip, genre)
+
+    if source == "language":
+        return await _collection_items(
+            content_type,
+            page,
+            genre=genre,
+            language=catalog_definition.get("language"),
+        )
+
+    if source == "quality":
+        return await _collection_items(
+            content_type,
+            page,
+            genre=genre,
+            quality=catalog_definition.get("quality"),
+        )
+
+    if source == "season_packs":
+        return await _season_pack_items(page, genre)
+
+    return []
+
+
+async def _sorted_items(
+    content_type: str,
+    sort_params: List[Tuple[str, str]],
+    page: int,
+    genre: Optional[str],
+) -> List[Dict[str, Any]]:
+    if genre:
+        return await _collection_items(content_type, page, genre=genre, sort_params=sort_params)
+
+    genres = [genre] if genre else None
+    if content_type == "movie":
+        results = await db.sort_movies(sort_params, page=page, page_size=PAGE_SIZE, genres=genres)
+    else:
+        results = await db.sort_tv_shows(sort_params, page=page, page_size=PAGE_SIZE, genres=genres)
+    return _clean_items(results.get(_result_key(content_type), []))
+
+
+async def _editors_choice_items(content_type: str, page: int, genre: Optional[str]) -> List[Dict[str, Any]]:
+    results = await db.get_editors_choice(
+        media_type=_backend_media_type(content_type),
+        page=page,
+        page_size=PAGE_SIZE,
+        min_rating=7.0,
+        min_files=1,
+    )
+    return [item for item in results.get(_result_key(content_type), []) if _matches_genre(item, genre)]
+
+
+async def _trending_items(content_type: str, skip: int, genre: Optional[str]) -> List[Dict[str, Any]]:
+    results = await db.get_trending()
+    items = [
+        item for item in results.get("results", [])
+        if _stremio_type(item) == content_type and _matches_genre(item, genre)
+    ]
+    return items[skip:skip + PAGE_SIZE]
+
+
+async def _collection_items(
+    content_type: str,
+    page: int,
+    genre: Optional[str] = None,
+    language: Optional[str] = None,
+    quality: Optional[str] = None,
+    sort_params: Optional[List[Tuple[str, str]]] = None,
+) -> List[Dict[str, Any]]:
+    skip = (page - 1) * PAGE_SIZE
+    collection = db.movie_collection if content_type == "movie" else db.tv_collection
+    if collection is None:
+        return []
+
+    query: Dict[str, Any] = {}
+    if genre:
+        query["genres"] = _exact_text_regex(genre)
+    if language:
+        query["languages"] = _exact_text_regex(language)
+    if quality and content_type == "movie":
+        query["telegram.quality"] = _quality_regex(quality)
+    elif quality:
+        query["$or"] = [
+            {"seasons.episodes.telegram.quality": _quality_regex(quality)},
+            {"seasons.packs.telegram.quality": _quality_regex(quality)},
+        ]
+
+    cursor = collection.find(query).sort(_mongo_sort(sort_params or [("updated_on", "desc"), ("rating", "desc")])).skip(skip).limit(PAGE_SIZE)
+    return [db._convert_object_id(item) for item in await cursor.to_list(PAGE_SIZE)]
+
+
+async def _season_pack_items(page: int, genre: Optional[str]) -> List[Dict[str, Any]]:
+    skip = (page - 1) * PAGE_SIZE
+    if db.tv_collection is None:
+        return []
+
+    query: Dict[str, Any] = {"seasons.packs.0": {"$exists": True}}
+    if genre:
+        query["genres"] = _exact_text_regex(genre)
+
+    cursor = db.tv_collection.find(query).sort([("updated_on", -1), ("rating", -1)]).skip(skip).limit(PAGE_SIZE)
+    return [db._convert_object_id(item) for item in await cursor.to_list(PAGE_SIZE)]
 
 
 @router.get("/meta/{content_type}/{stremio_id}.json")
