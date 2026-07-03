@@ -13,6 +13,7 @@ ADDON_ID = "org.xstream.backend"
 ADDON_NAME = "X-Stream"
 CATALOG_MOVIES = "xstream-movies"
 CATALOG_SERIES = "xstream-series"
+CATALOG_NAME = "X-Stream"
 
 
 def _as_dict(value: Any) -> Dict[str, Any]:
@@ -100,24 +101,69 @@ def _trailers(trailer_url: Optional[str]) -> List[Dict[str, str]]:
 
 
 def _series_videos(document: Dict[str, Any]) -> List[Dict[str, Any]]:
-    videos: List[Dict[str, Any]] = []
+    videos_by_key: Dict[Tuple[int, int], Dict[str, Any]] = {}
     tmdb_id = document.get("tmdb_id")
 
     for season in document.get("seasons") or []:
         season_number = season.get("season_number")
         for episode in season.get("episodes") or []:
-            episode_number = episode.get("episode_number")
-            if season_number is None or episode_number is None:
-                continue
-            videos.append({
-                "id": f"tmdb:{tmdb_id}:{season_number}:{episode_number}",
-                "title": episode.get("title") or f"Episode {episode_number}",
-                "season": season_number,
-                "episode": episode_number,
-                "thumbnail": episode.get("episode_backdrop") or document.get("backdrop"),
-            })
+            _add_series_video(videos_by_key, tmdb_id, season_number, episode, document.get("backdrop"))
 
-    return sorted(videos, key=lambda item: (item.get("season", 0), item.get("episode", 0)))
+        for pack in season.get("packs") or []:
+            pack_backdrop = pack.get("backdrop") or document.get("backdrop")
+            pack_episodes = pack.get("episodes") or []
+            if pack_episodes:
+                for episode in pack_episodes:
+                    _add_series_video(videos_by_key, tmdb_id, season_number, episode, pack_backdrop)
+                continue
+
+            for episode_number in _pack_episode_numbers(pack):
+                _add_series_video(
+                    videos_by_key,
+                    tmdb_id,
+                    season_number,
+                    {"episode_number": episode_number, "title": f"Episode {episode_number}"},
+                    pack_backdrop,
+                )
+
+    return sorted(videos_by_key.values(), key=lambda item: (item.get("season", 0), item.get("episode", 0)))
+
+
+def _add_series_video(
+    videos_by_key: Dict[Tuple[int, int], Dict[str, Any]],
+    tmdb_id: Any,
+    season_number: Optional[int],
+    episode: Dict[str, Any],
+    fallback_backdrop: Optional[str],
+) -> None:
+    episode_number = episode.get("episode_number")
+    if season_number is None or episode_number is None:
+        return
+
+    key = (int(season_number), int(episode_number))
+    videos_by_key[key] = {
+        "id": f"tmdb:{tmdb_id}:{season_number}:{episode_number}",
+        "title": episode.get("title") or f"Episode {episode_number}",
+        "season": season_number,
+        "episode": episode_number,
+        "thumbnail": episode.get("episode_backdrop") or fallback_backdrop,
+    }
+
+
+def _pack_episode_numbers(pack: Dict[str, Any]) -> List[int]:
+    numbers = [int(number) for number in pack.get("episode_numbers") or [] if number is not None]
+    if numbers:
+        return sorted(set(numbers))
+
+    start = pack.get("episode_start")
+    end = pack.get("episode_end")
+    if start is None or end is None:
+        return []
+
+    start, end = int(start), int(end)
+    if end < start:
+        start, end = end, start
+    return list(range(start, end + 1))
 
 
 def _stream_url(base_url: str, item: Dict[str, Any]) -> str:
@@ -182,18 +228,22 @@ async def _series_streams(
                 streams.extend(_stream_items(base_url, episode.get("telegram") or []))
 
         for pack in season.get("packs") or []:
-            numbers = pack.get("episode_numbers") or []
-            start = pack.get("episode_start")
-            end = pack.get("episode_end")
-            contains_episode = episode_number in numbers or (
-                start is not None and end is not None and start <= episode_number <= end
-            )
-            if contains_episode:
+            if _pack_contains_episode(pack, episode_number):
                 streams.extend(_stream_items(base_url, pack.get("telegram") or [], prefix=pack.get("title") or "Pack"))
     else:
         streams.extend(_stream_items(base_url, season.get("packs") or [], prefix=f"S{season_number} Pack"))
 
     return streams
+
+
+def _pack_contains_episode(pack: Dict[str, Any], episode_number: int) -> bool:
+    if episode_number in _pack_episode_numbers(pack):
+        return True
+
+    return any(
+        episode.get("episode_number") == episode_number
+        for episode in pack.get("episodes") or []
+    )
 
 
 @router.get("/manifest.json")
@@ -209,13 +259,13 @@ async def manifest() -> Dict[str, Any]:
             {
                 "type": "movie",
                 "id": CATALOG_MOVIES,
-                "name": "X-Stream Movies",
+                "name": CATALOG_NAME,
                 "extra": [{"name": "search", "isRequired": False}],
             },
             {
                 "type": "series",
                 "id": CATALOG_SERIES,
-                "name": "X-Stream Series",
+                "name": CATALOG_NAME,
                 "extra": [{"name": "search", "isRequired": False}],
             },
         ],
