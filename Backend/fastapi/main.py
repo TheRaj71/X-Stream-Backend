@@ -21,6 +21,7 @@ from Backend.helper.custom_dl import ByteStreamer
 from fastapi.middleware.cors import CORSMiddleware
 from Backend.helper.pyro import get_readable_time
 from Backend import StartTime, __version__, db
+from Backend.addons.stremio import router as stremio_router
 
 
 app = FastAPI()
@@ -36,6 +37,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(stremio_router)
 
 
 def parse_genres(genres: Optional[str]) -> List[str]:
