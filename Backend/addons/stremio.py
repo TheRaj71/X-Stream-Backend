@@ -1,3 +1,4 @@
+import re
 from math import floor
 from re import escape
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -21,6 +22,10 @@ GENRE_OPTIONS = [
     "Drama", "Family", "Fantasy", "History", "Horror", "Mystery",
     "Romance", "Science Fiction", "Thriller", "War", "Western",
 ]
+FEATURED_GENRES = [
+    "Action", "Comedy", "Drama", "Horror", "Romance", "Science Fiction",
+    "Thriller", "Animation", "Crime", "Fantasy",
+]
 LANGUAGE_CATALOGS = {
     "xstream-hindi": "Hindi",
     "xstream-english": "English",
@@ -29,32 +34,31 @@ LANGUAGE_CATALOGS = {
 }
 QUALITY_CATALOGS = {
     "xstream-4k": ("2160p|4k|uhd", "4K Picks"),
-    "xstream-1080p": ("1080p", "Full HD Picks"),
 }
 CATALOGS = {
-    CATALOG_MOVIES: {"type": "movie", "name": "Latest Movies", "source": "sort", "sort": [("updated_on", "desc")]},
-    CATALOG_SERIES: {"type": "series", "name": "Latest Series", "source": "sort", "sort": [("updated_on", "desc")]},
-    "xstream-trending-movies": {"type": "movie", "name": "Trending Movies", "source": "trending"},
-    "xstream-trending-series": {"type": "series", "name": "Trending Series", "source": "trending"},
-    "xstream-editors-movies": {"type": "movie", "name": "Editors Choice Movies", "source": "editors"},
-    "xstream-editors-series": {"type": "series", "name": "Editors Choice Series", "source": "editors"},
-    "xstream-top-movies": {"type": "movie", "name": "Top Rated Movies", "source": "sort", "sort": [("rating", "desc"), ("vote_count", "desc")]},
-    "xstream-top-series": {"type": "series", "name": "Top Rated Series", "source": "sort", "sort": [("rating", "desc"), ("vote_count", "desc")]},
-    "xstream-popular-movies": {"type": "movie", "name": "Popular Movies", "source": "sort", "sort": [("popularity", "desc"), ("rating", "desc")]},
-    "xstream-popular-series": {"type": "series", "name": "Popular Series", "source": "sort", "sort": [("popularity", "desc"), ("rating", "desc")]},
-    "xstream-season-packs": {"type": "series", "name": "Season Packs", "source": "season_packs"},
+    "xstream-trending-movies": {"type": "movie", "name": "Trending", "source": "trending", "poster_shape": "landscape"},
+    "xstream-trending-series": {"type": "series", "name": "Trending", "source": "trending", "poster_shape": "landscape"},
+    "xstream-editors-movies": {"type": "movie", "name": "Editors Choice", "source": "editors", "poster_shape": "landscape"},
+    "xstream-editors-series": {"type": "series", "name": "Editors Choice", "source": "editors", "poster_shape": "landscape"},
+    CATALOG_MOVIES: {"type": "movie", "name": "Latest", "source": "sort", "sort": [("updated_on", "desc")]},
+    CATALOG_SERIES: {"type": "series", "name": "Latest", "source": "sort", "sort": [("updated_on", "desc")]},
+    "xstream-top-movies": {"type": "movie", "name": "Top Rated", "source": "sort", "sort": [("rating", "desc"), ("vote_count", "desc")]},
+    "xstream-top-series": {"type": "series", "name": "Top Rated", "source": "sort", "sort": [("rating", "desc"), ("vote_count", "desc")]},
+    "xstream-popular-movies": {"type": "movie", "name": "Popular", "source": "sort", "sort": [("popularity", "desc"), ("rating", "desc")]},
+    "xstream-popular-series": {"type": "series", "name": "Popular", "source": "sort", "sort": [("popularity", "desc"), ("rating", "desc")]},
+    "xstream-season-packs": {"type": "series", "name": "Season Packs", "source": "season_packs", "poster_shape": "landscape"},
 }
 
 for catalog_id, language in LANGUAGE_CATALOGS.items():
     CATALOGS[f"{catalog_id}-movies"] = {
         "type": "movie",
-        "name": f"{language} Movies",
+        "name": language,
         "source": "language",
         "language": language,
     }
     CATALOGS[f"{catalog_id}-series"] = {
         "type": "series",
-        "name": f"{language} Series",
+        "name": language,
         "source": "language",
         "language": language,
     }
@@ -62,15 +66,34 @@ for catalog_id, language in LANGUAGE_CATALOGS.items():
 for catalog_id, (quality, name) in QUALITY_CATALOGS.items():
     CATALOGS[f"{catalog_id}-movies"] = {
         "type": "movie",
-        "name": f"{name} Movies",
+        "name": name,
         "source": "quality",
         "quality": quality,
+        "poster_shape": "landscape",
     }
     CATALOGS[f"{catalog_id}-series"] = {
         "type": "series",
-        "name": f"{name} Series",
+        "name": name,
         "source": "quality",
         "quality": quality,
+        "poster_shape": "landscape",
+    }
+
+for genre in FEATURED_GENRES:
+    catalog_slug = genre.lower().replace(" ", "-")
+    CATALOGS[f"xstream-genre-{catalog_slug}-movies"] = {
+        "type": "movie",
+        "name": genre,
+        "source": "genre",
+        "genre": genre,
+        "poster_shape": "landscape",
+    }
+    CATALOGS[f"xstream-genre-{catalog_slug}-series"] = {
+        "type": "series",
+        "name": genre,
+        "source": "genre",
+        "genre": genre,
+        "poster_shape": "landscape",
     }
 
 
@@ -174,14 +197,28 @@ def _mongo_sort(sort_params: List[Tuple[str, str]]) -> List[Tuple[str, int]]:
     return [(field, -1 if direction == "desc" else 1) for field, direction in sort_params]
 
 
-def _preview_meta(document: Dict[str, Any]) -> Dict[str, Any]:
+def _image_url(value: Any) -> Optional[str]:
+    if not value:
+        return None
+    value = str(value)
+    if value.startswith(("http://", "https://")):
+        return value
+    if value.startswith("/"):
+        return f"https://image.tmdb.org/t/p/original{value}"
+    return value
+
+
+def _preview_meta(document: Dict[str, Any], poster_shape: str = "poster") -> Dict[str, Any]:
     media_type = _stremio_type(document)
+    poster = document.get("backdrop") if poster_shape == "landscape" else document.get("poster")
+    poster = poster or document.get("poster") or document.get("backdrop")
     return {
         "id": f"tmdb:{document.get('tmdb_id')}",
         "type": media_type,
         "name": document.get("title", "Untitled"),
-        "poster": document.get("poster"),
-        "background": document.get("backdrop"),
+        "poster": _image_url(poster),
+        "posterShape": poster_shape,
+        "background": _image_url(document.get("backdrop") or document.get("poster")),
         "description": document.get("description"),
         "releaseInfo": str(document.get("release_year") or ""),
         "imdbRating": str(document.get("rating") or ""),
@@ -194,6 +231,7 @@ def _full_meta(document: Dict[str, Any]) -> Dict[str, Any]:
     meta.update({
         "runtime": document.get("runtime"),
         "trailers": _trailers(document.get("trailer_url")),
+        "cast": _cast_names(document.get("cast")),
     })
 
     if meta["type"] == "series":
@@ -203,9 +241,50 @@ def _full_meta(document: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _trailers(trailer_url: Optional[str]) -> List[Dict[str, str]]:
-    if not trailer_url:
+    youtube_id = _youtube_id(trailer_url)
+    if not youtube_id:
         return []
-    return [{"source": trailer_url, "type": "Trailer"}]
+    return [{"source": youtube_id, "type": "Trailer"}]
+
+
+def _youtube_id(trailer_url: Optional[str]) -> Optional[str]:
+    if not trailer_url:
+        return None
+
+    trailer_url = trailer_url.strip()
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", trailer_url):
+        return trailer_url
+
+    patterns = [
+        r"youtu\.be/([A-Za-z0-9_-]{11})",
+        r"youtube\.com/embed/([A-Za-z0-9_-]{11})",
+        r"youtube\.com/shorts/([A-Za-z0-9_-]{11})",
+        r"[?&]v=([A-Za-z0-9_-]{11})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, trailer_url)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _cast_names(cast: Any) -> List[str]:
+    names: List[str] = []
+    if isinstance(cast, dict):
+        cast = cast.get("cast") or cast.get("results") or cast.get("people") or []
+
+    for person in cast or []:
+        if isinstance(person, str):
+            name = person
+        elif isinstance(person, dict):
+            name = person.get("name") or person.get("original_name") or person.get("character")
+        else:
+            name = None
+
+        if name:
+            names.append(str(name))
+
+    return names[:12]
 
 
 def _series_videos(document: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -254,7 +333,7 @@ def _add_series_video(
         "title": episode.get("title") or f"Episode {episode_number}",
         "season": season_number,
         "episode": episode_number,
-        "thumbnail": episode.get("episode_backdrop") or fallback_backdrop,
+        "thumbnail": _image_url(episode.get("episode_backdrop") or fallback_backdrop),
     }
 
 
@@ -392,7 +471,8 @@ async def catalog(content_type: str, catalog_id: str, extra: Optional[str] = Non
         return {"metas": []}
 
     items = await _catalog_items(content_type, catalog_definition, params)
-    return {"metas": [_preview_meta(item) for item in items]}
+    poster_shape = catalog_definition.get("poster_shape", "poster")
+    return {"metas": [_preview_meta(item, poster_shape=poster_shape) for item in items]}
 
 
 async def _catalog_items(content_type: str, catalog_definition: Dict[str, Any], params: Dict[str, str]) -> List[Dict[str, Any]]:
@@ -433,6 +513,14 @@ async def _catalog_items(content_type: str, catalog_definition: Dict[str, Any], 
             page,
             genre=genre,
             quality=catalog_definition.get("quality"),
+        )
+
+    if source == "genre":
+        return await _collection_items(
+            content_type,
+            page,
+            genre=catalog_definition.get("genre") or genre,
+            sort_params=[("rating", "desc"), ("updated_on", "desc")],
         )
 
     if source == "season_packs":
