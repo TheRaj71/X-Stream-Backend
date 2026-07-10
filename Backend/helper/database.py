@@ -1,4 +1,5 @@
 from datetime import datetime
+from re import escape
 from typing import Dict, List, Optional, Tuple, Union
 from bson import ObjectId
 from fastapi import HTTPException
@@ -375,6 +376,46 @@ class Database:
         sorted_movies = [MovieSchema(**doc) for doc in result[0]["data"]]
         return {"total_count": total_count, "movies": sorted_movies}
 
+    async def get_mixed_collection(
+        self,
+        collection_type: str,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict:
+        skip = (page - 1) * page_size
+        fetch_limit = skip + page_size
+        sort_criteria = [("release_year", DESCENDING), ("updated_on", DESCENDING), ("rating", DESCENDING)]
+
+        if collection_type == "kdrama":
+            query = {"$or": [
+                {"languages": self._exact_text_regex("ko")},
+                {"languages": self._exact_text_regex("Korean")},
+            ]}
+        elif collection_type == "anime":
+            query = {"genres": self._exact_text_regex("Animation")}
+        else:
+            raise ValueError("collection_type must be 'kdrama' or 'anime'")
+
+        movie_cursor = self.movie_collection.find(query).sort(sort_criteria).limit(fetch_limit)
+        tv_cursor = self.tv_collection.find(query).sort(sort_criteria).limit(fetch_limit)
+        movie_results = [self._convert_object_id(doc) for doc in await movie_cursor.to_list(fetch_limit)]
+        tv_results = [self._convert_object_id(doc) for doc in await tv_cursor.to_list(fetch_limit)]
+
+        combined = sorted(
+            movie_results + tv_results,
+            key=lambda item: (
+                item.get("release_year") or 0,
+                item.get("updated_on") or datetime.min,
+                item.get("rating") or 0,
+            ),
+            reverse=True,
+        )
+        total_count = await self.movie_collection.count_documents(query) + await self.tv_collection.count_documents(query)
+        return {
+            "total_count": total_count,
+            "results": combined[skip:skip + page_size],
+        }
+
     async def get_editors_choice(
         self,
         media_type: str = "all",
@@ -447,6 +488,9 @@ class Database:
         if genre_mode == "all":
             return {"genres": {"$all": clean_genres}}
         return {"genres": {"$in": clean_genres}}
+
+    def _exact_text_regex(self, value: str) -> dict:
+        return {"$regex": f"^{escape(value)}$", "$options": "i"}
 
     def _editors_choice_pipeline(
         self,

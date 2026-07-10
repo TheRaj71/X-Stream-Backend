@@ -47,7 +47,8 @@ CATALOGS = {
     "xstream-popular-series": {"type": "series", "name": "Popular", "source": "sort", "sort": [("popularity", "desc"), ("rating", "desc")]},
     "xstream-editors-movies": {"type": "movie", "name": "Editors Choice", "source": "editors", "poster_shape": "landscape"},
     "xstream-editors-series": {"type": "series", "name": "Editors Choice", "source": "editors", "poster_shape": "landscape"},
-    "xstream-kdrama-series": {"type": "series", "name": "K-Drama", "source": "kdrama", "poster_shape": "landscape"},
+    "xstream-kdrama-series": {"type": "series", "name": "K-Drama Series", "source": "kdrama", "poster_shape": "landscape"},
+    "xstream-kdrama-movies": {"type": "movie", "name": "K-Drama Movies", "source": "kdrama", "poster_shape": "landscape"},
     "xstream-anime-movies": {"type": "movie", "name": "Anime", "source": "genre", "genre": ANIME_GENRE, "poster_shape": "landscape"},
     "xstream-anime-series": {"type": "series", "name": "Anime", "source": "genre", "genre": ANIME_GENRE, "poster_shape": "landscape"},
 }
@@ -465,10 +466,10 @@ async def _catalog_items(content_type: str, catalog_definition: Dict[str, Any], 
 
     if source == "kdrama":
         return await _collection_items(
-            "series",
+            content_type,
             page,
             language=KDRAMA_LANGUAGES,
-            sort_params=[("rating", "desc"), ("updated_on", "desc")],
+            sort_params=[("release_year", "desc"), ("updated_on", "desc"), ("rating", "desc")],
         )
 
     if source == "language":

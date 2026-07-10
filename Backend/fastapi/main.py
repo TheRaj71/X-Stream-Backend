@@ -187,6 +187,29 @@ async def get_trending():
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@app.get("/api/collections/{collection_type}", response_model=dict)
+async def get_mixed_collection(
+    collection_type: str,
+    page: int = Query(default=1, ge=1, description="Page number to return"),
+    page_size: int = Query(default=20, ge=1, le=100, description="Number of items per page"),
+):
+    """
+    Mixed movie/series collections for homepage shelves.
+    Supported collection_type values: kdrama, anime.
+    """
+    try:
+        if collection_type not in ("kdrama", "anime"):
+            raise HTTPException(status_code=404, detail="Collection not found")
+        return await db.get_mixed_collection(
+            collection_type=collection_type,
+            page=page,
+            page_size=page_size,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 #Homepage:------
 # hero = http://localhost:8000/api/tvshows?sort_by=rating:desc&sort_by=release_year:desc&page=1&page_size=10
 # latest movies = http://localhost:8000/api/movies?sort_by=updated_on:desc&page=1&page_size=20
