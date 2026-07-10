@@ -12,6 +12,21 @@ from Backend.config import Telegram
 from Backend.helper.encrypt import encode_string
 from Backend.helper.modal import Episode, EpisodePack, MovieSchema, QualityDetail, Season, TVShowSchema
 
+METADATA_REFRESH_FIELDS = (
+    "languages",
+    "rip",
+    "rating",
+    "vote_count",
+    "popularity",
+    "trailer_url",
+    "cast",
+    "watch_providers",
+    "original_language",
+    "origin_country",
+    "production_countries",
+    "content_tags",
+)
+
 
 class Database:
     def __init__(self, connection_uri: str = Telegram.DATABASE, db_name: str = "projectS"):
@@ -152,16 +167,16 @@ class Database:
                 existing_media["seasons"].append(season)
                 updated = True
 
+        for field in METADATA_REFRESH_FIELDS:
+            incoming_value = tv_show_dict.get(field)
+            if incoming_value in (None, [], ""):
+                continue
+            if existing_media.get(field) != incoming_value:
+                existing_media[field] = incoming_value
+                updated = True
+
         if updated:
             existing_media["updated_on"] = datetime.utcnow()
-            existing_media["languages"] = tv_show_dict["languages"]
-            existing_media["rip"] = tv_show_dict["rip"]
-            existing_media["rating"] = tv_show_dict["rating"]
-            existing_media["vote_count"] = tv_show_dict["vote_count"]
-            existing_media["popularity"] = tv_show_dict["popularity"]
-            existing_media["trailer_url"] = tv_show_dict.get("trailer_url") or existing_media.get("trailer_url")
-            existing_media["cast"] = tv_show_dict.get("cast") or existing_media.get("cast", [])
-            existing_media["watch_providers"] = tv_show_dict.get("watch_providers") or existing_media.get("watch_providers", [])
             await self.tv_collection.replace_one(
                 {"tmdb_id": tv_show_dict["tmdb_id"]}, existing_media)
             return existing_media["_id"]
@@ -203,16 +218,16 @@ class Database:
                 existing_media["telegram"].append(quality)
                 updated = True
 
+        for field in METADATA_REFRESH_FIELDS:
+            incoming_value = movie_dict.get(field)
+            if incoming_value in (None, [], ""):
+                continue
+            if existing_media.get(field) != incoming_value:
+                existing_media[field] = incoming_value
+                updated = True
+
         if updated:
             existing_media["updated_on"] = datetime.utcnow()
-            existing_media["languages"] = movie_dict["languages"]
-            existing_media["rip"] = movie_dict["rip"]
-            existing_media["rating"] = movie_dict["rating"]
-            existing_media["vote_count"] = movie_dict["vote_count"]
-            existing_media["popularity"] = movie_dict["popularity"]
-            existing_media["trailer_url"] = movie_dict.get("trailer_url") or existing_media.get("trailer_url")
-            existing_media["cast"] = movie_dict.get("cast") or existing_media.get("cast", [])
-            existing_media["watch_providers"] = movie_dict.get("watch_providers") or existing_media.get("watch_providers", [])
             await self.movie_collection.replace_one(
                 {"tmdb_id": movie_dict["tmdb_id"]}, existing_media)
             return existing_media["_id"]
@@ -247,6 +262,10 @@ class Database:
                 trailer_url=metadata_info.get('trailer_url'),
                 cast=metadata_info.get('cast', []),
                 watch_providers=metadata_info.get('watch_providers', []),
+                original_language=metadata_info.get('original_language'),
+                origin_country=metadata_info.get('origin_country', []),
+                production_countries=metadata_info.get('production_countries', []),
+                content_tags=metadata_info.get('content_tags', []),
                 runtime=metadata_info['runtime'],
                 media_type=metadata_info['media_type'],
                 languages=metadata_info['languages'],
@@ -312,6 +331,10 @@ class Database:
                 trailer_url=metadata_info.get('trailer_url'),
                 cast=metadata_info.get('cast', []),
                 watch_providers=metadata_info.get('watch_providers', []),
+                original_language=metadata_info.get('original_language'),
+                origin_country=metadata_info.get('origin_country', []),
+                production_countries=metadata_info.get('production_countries', []),
+                content_tags=metadata_info.get('content_tags', []),
                 media_type=metadata_info['media_type'],
                 status=metadata_info['status'],
                 total_seasons=metadata_info['total_seasons'],
@@ -387,12 +410,9 @@ class Database:
         sort_criteria = [("release_year", DESCENDING), ("updated_on", DESCENDING), ("rating", DESCENDING)]
 
         if collection_type == "kdrama":
-            query = {"$or": [
-                {"languages": self._exact_text_regex("ko")},
-                {"languages": self._exact_text_regex("Korean")},
-            ]}
+            query = self._korean_content_query()
         elif collection_type == "anime":
-            query = {"genres": self._exact_text_regex("Animation")}
+            query = self._anime_content_query()
         else:
             raise ValueError("collection_type must be 'kdrama' or 'anime'")
 
@@ -491,6 +511,41 @@ class Database:
 
     def _exact_text_regex(self, value: str) -> dict:
         return {"$regex": f"^{escape(value)}$", "$options": "i"}
+
+    def _korean_content_query(self) -> dict:
+        missing_tags = {"$or": [{"content_tags": {"$exists": False}}, {"content_tags": []}]}
+        return {
+            "$or": [
+                {"content_tags": self._exact_text_regex("kdrama")},
+                {"content_tags": self._exact_text_regex("korean")},
+                {"origin_country": self._exact_text_regex("KR")},
+                {"production_countries": self._exact_text_regex("KR")},
+                {"original_language": self._exact_text_regex("ko")},
+                {"$and": [missing_tags, {"languages": self._exact_text_regex("ko")}]},
+                {"$and": [missing_tags, {"languages": self._exact_text_regex("Korean")}]},
+            ]
+        }
+
+    def _anime_content_query(self) -> dict:
+        missing_tags = {"$or": [{"content_tags": {"$exists": False}}, {"content_tags": []}]}
+        return {
+            "$or": [
+                {"content_tags": self._exact_text_regex("anime")},
+                {
+                    "$and": [
+                        {"genres": self._exact_text_regex("Animation")},
+                        {
+                            "$or": [
+                                {"origin_country": {"$in": ["JP", "KR", "CN", "TW"]}},
+                                {"production_countries": {"$in": ["JP", "KR", "CN", "TW"]}},
+                                {"original_language": {"$in": ["ja", "ko", "zh", "cn"]}},
+                            ]
+                        },
+                    ]
+                },
+                {"$and": [missing_tags, {"genres": self._exact_text_regex("Animation")}]},
+            ]
+        }
 
     def _editors_choice_pipeline(
         self,

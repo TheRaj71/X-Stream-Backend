@@ -25,7 +25,6 @@ FEATURED_GENRES = [
     "Action", "Romance", "Comedy", "Thriller", "Horror", "Drama",
     "Science Fiction", "Crime", "Fantasy",
 ]
-ANIME_GENRE = "Animation"
 KDRAMA_LANGUAGES = ["ko", "Korean"]
 LANGUAGE_CATALOGS = {
     "xstream-hindi": "Hindi",
@@ -49,8 +48,8 @@ CATALOGS = {
     "xstream-editors-series": {"type": "series", "name": "Editors Choice", "source": "editors", "poster_shape": "landscape"},
     "xstream-kdrama-series": {"type": "series", "name": "K-Drama Series", "source": "kdrama", "poster_shape": "landscape"},
     "xstream-kdrama-movies": {"type": "movie", "name": "K-Drama Movies", "source": "kdrama", "poster_shape": "landscape"},
-    "xstream-anime-movies": {"type": "movie", "name": "Anime", "source": "genre", "genre": ANIME_GENRE, "poster_shape": "landscape"},
-    "xstream-anime-series": {"type": "series", "name": "Anime", "source": "genre", "genre": ANIME_GENRE, "poster_shape": "landscape"},
+    "xstream-anime-movies": {"type": "movie", "name": "Anime", "source": "anime", "poster_shape": "landscape"},
+    "xstream-anime-series": {"type": "series", "name": "Anime", "source": "anime", "poster_shape": "landscape"},
 }
 
 for genre in FEATURED_GENRES:
@@ -169,6 +168,42 @@ def _quality_regex(quality: str) -> Dict[str, str]:
 
 def _exact_text_regex(value: str) -> Dict[str, str]:
     return {"$regex": f"^{escape(value)}$", "$options": "i"}
+
+
+def _korean_content_query() -> Dict[str, Any]:
+    missing_tags = {"$or": [{"content_tags": {"$exists": False}}, {"content_tags": []}]}
+    return {
+        "$or": [
+            {"content_tags": _exact_text_regex("kdrama")},
+            {"content_tags": _exact_text_regex("korean")},
+            {"origin_country": _exact_text_regex("KR")},
+            {"production_countries": _exact_text_regex("KR")},
+            {"original_language": _exact_text_regex("ko")},
+            *({"$and": [missing_tags, {"languages": _exact_text_regex(language)}]} for language in KDRAMA_LANGUAGES),
+        ]
+    }
+
+
+def _anime_content_query() -> Dict[str, Any]:
+    missing_tags = {"$or": [{"content_tags": {"$exists": False}}, {"content_tags": []}]}
+    return {
+        "$or": [
+            {"content_tags": _exact_text_regex("anime")},
+            {
+                "$and": [
+                    {"genres": _exact_text_regex("Animation")},
+                    {
+                        "$or": [
+                            {"origin_country": {"$in": ["JP", "KR", "CN", "TW"]}},
+                            {"production_countries": {"$in": ["JP", "KR", "CN", "TW"]}},
+                            {"original_language": {"$in": ["ja", "ko", "zh", "cn"]}},
+                        ]
+                    },
+                ]
+            },
+            {"$and": [missing_tags, {"genres": _exact_text_regex("Animation")}]},
+        ]
+    }
 
 
 def _catalog_extra() -> List[Dict[str, Any]]:
@@ -468,7 +503,15 @@ async def _catalog_items(content_type: str, catalog_definition: Dict[str, Any], 
         return await _collection_items(
             content_type,
             page,
-            language=KDRAMA_LANGUAGES,
+            category="korean",
+            sort_params=[("release_year", "desc"), ("updated_on", "desc"), ("rating", "desc")],
+        )
+
+    if source == "anime":
+        return await _collection_items(
+            content_type,
+            page,
+            category="anime",
             sort_params=[("release_year", "desc"), ("updated_on", "desc"), ("rating", "desc")],
         )
 
@@ -545,6 +588,7 @@ async def _collection_items(
     genre: Optional[str] = None,
     language: Optional[Any] = None,
     quality: Optional[str] = None,
+    category: Optional[str] = None,
     sort_params: Optional[List[Tuple[str, str]]] = None,
 ) -> List[Dict[str, Any]]:
     skip = (page - 1) * PAGE_SIZE
@@ -553,6 +597,10 @@ async def _collection_items(
         return []
 
     query: Dict[str, Any] = {}
+    if category == "korean":
+        query = _korean_content_query()
+    elif category == "anime":
+        query = _anime_content_query()
     if genre:
         query["genres"] = _exact_text_regex(genre)
     if language:

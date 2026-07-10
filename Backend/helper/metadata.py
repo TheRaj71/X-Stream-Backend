@@ -158,6 +158,56 @@ def format_watch_providers(provider_response, region: str = "IN", limit: int = 8
                 return formatted
     return formatted
 
+
+def _country_code(value) -> str:
+    if isinstance(value, str):
+        return value.upper()
+    if isinstance(value, dict):
+        return (value.get("iso_3166_1") or value.get("code") or value.get("name") or "").upper()
+    return (
+        getattr(value, "iso_3166_1", None)
+        or getattr(value, "code", None)
+        or getattr(value, "name", "")
+        or ""
+    ).upper()
+
+
+def _country_codes(values) -> list:
+    return sorted({code for code in (_country_code(value) for value in values or []) if code})
+
+
+def _tmdb_origin_country(details) -> list:
+    return _country_codes(getattr(details, "origin_country", None) or [])
+
+
+def _tmdb_production_countries(details) -> list:
+    return _country_codes(getattr(details, "production_countries", None) or [])
+
+
+def _tmdb_original_language(details) -> str:
+    return (getattr(details, "original_language", None) or "").lower() or None
+
+
+def build_content_tags(media_type: str, genres: list, original_language: str = None, origin_country: list = None, production_countries: list = None) -> list:
+    tags = set()
+    normalized_genres = {str(genre).strip().lower() for genre in genres or []}
+    origin_codes = {str(country).upper() for country in origin_country or []}
+    production_codes = {str(country).upper() for country in production_countries or []}
+    original_language = (original_language or "").lower()
+
+    is_korean = "KR" in origin_codes or "KR" in production_codes or original_language == "ko"
+    if is_korean:
+        tags.add("korean")
+        if media_type == "tv":
+            tags.add("kdrama")
+
+    is_animation = "animation" in normalized_genres
+    is_east_asian_animation = bool({"JP", "KR", "CN", "TW"}.intersection(origin_codes | production_codes))
+    if is_animation and (is_east_asian_animation or original_language in {"ja", "ko", "zh", "cn"}):
+        tags.add("anime")
+
+    return sorted(tags)
+
 async def metadata(filename: str, media) -> dict:
     try:
         parsed = PTN.parse(filename)
@@ -273,6 +323,10 @@ async def fetch_tv_metadata(title: str, season: int, episode: int, year=None, qu
             backdrop = f"https://image.tmdb.org/t/p/original{tv_details.backdrop_path}" if tv_details.backdrop_path else ''
             status = tv_details.status or 'Unknown'
             genres = [genre.name for genre in tv_details.genres] if tv_details.genres else []
+            original_language = _tmdb_original_language(tv_details)
+            origin_country = _tmdb_origin_country(tv_details)
+            production_countries = _tmdb_production_countries(tv_details)
+            content_tags = build_content_tags("tv", genres, original_language, origin_country, production_countries)
             ep_title = ep_details.name if ep_details and hasattr(ep_details, 'name') else f"S{season}E{episode}"
             ep_backdrop = f"https://image.tmdb.org/t/p/original{ep_details.still_path}" if ep_details and ep_details.still_path else ''
             try:
@@ -303,6 +357,10 @@ async def fetch_tv_metadata(title: str, season: int, episode: int, year=None, qu
             poster = tv_details.get('image', '')
             backdrop = ''
             genres = tv_details.get('genre', [])
+            original_language = None
+            origin_country = []
+            production_countries = []
+            content_tags = build_content_tags("tv", genres, original_language, origin_country, production_countries)
             ep_title = ep_details.get('title', f"S{season}E{episode}") if ep_details else f"S{season}E{episode}"
             ep_backdrop = ep_details.get('image', '') if ep_details else ''
             trailer_url = None
@@ -316,6 +374,10 @@ async def fetch_tv_metadata(title: str, season: int, episode: int, year=None, qu
                     fallback_detail = await tmdb.tv(fallback_id).details()
                     backdrop = f"https://image.tmdb.org/t/p/original{fallback_detail.backdrop_path}" if fallback_detail.backdrop_path else ''
                     status = fallback_detail.status or 'Unknown'
+                    original_language = _tmdb_original_language(fallback_detail)
+                    origin_country = _tmdb_origin_country(fallback_detail)
+                    production_countries = _tmdb_production_countries(fallback_detail)
+                    content_tags = build_content_tags("tv", genres, original_language, origin_country, production_countries)
                 else:
                     status = 'Unknown'
             except Exception as e:
@@ -337,6 +399,10 @@ async def fetch_tv_metadata(title: str, season: int, episode: int, year=None, qu
             "trailer_url": trailer_url,
             "cast": cast,
             "watch_providers": watch_providers,
+            "original_language": original_language,
+            "origin_country": origin_country,
+            "production_countries": production_countries,
+            "content_tags": content_tags,
             "status": status,
             "genres": genres,
             "media_type": "tv",
@@ -465,6 +531,16 @@ async def fetch_tv_pack_metadata(title: str, pack_info: dict, year=None, quality
             "watch_providers": watch_providers,
             "status": tv_details.status or 'Unknown',
             "genres": [genre.name for genre in tv_details.genres] if tv_details.genres else [],
+            "original_language": _tmdb_original_language(tv_details),
+            "origin_country": _tmdb_origin_country(tv_details),
+            "production_countries": _tmdb_production_countries(tv_details),
+            "content_tags": build_content_tags(
+                "tv",
+                [genre.name for genre in tv_details.genres] if tv_details.genres else [],
+                _tmdb_original_language(tv_details),
+                _tmdb_origin_country(tv_details),
+                _tmdb_production_countries(tv_details),
+            ),
             "media_type": "tv",
             "season_number": season_number,
             "pack": {
@@ -541,6 +617,10 @@ async def fetch_movie_metadata(title: str, year=None, quality=None, default_id=N
             backdrop = f"https://image.tmdb.org/t/p/original{movie_details.backdrop_path}" if movie_details.backdrop_path else ''
             runtime = movie_details.runtime or 0
             genres = [genre.name for genre in movie_details.genres] if movie_details.genres else []
+            original_language = _tmdb_original_language(movie_details)
+            origin_country = _tmdb_origin_country(movie_details)
+            production_countries = _tmdb_production_countries(movie_details)
+            content_tags = build_content_tags("movie", genres, original_language, origin_country, production_countries)
             try:
                 trailer_url = pick_youtube_trailer(await tmdb.movie(tmdb_id).videos())
             except Exception as e:
@@ -566,6 +646,10 @@ async def fetch_movie_metadata(title: str, year=None, quality=None, default_id=N
             popularity = 0
             runtime = movie_details.get('runtimeSeconds', 0) // 60
             genres = movie_details.get('genre', [])
+            original_language = None
+            origin_country = []
+            production_countries = []
+            content_tags = build_content_tags("movie", genres, original_language, origin_country, production_countries)
             trailer_url = None
             cast = []
             watch_providers = []
@@ -576,6 +660,10 @@ async def fetch_movie_metadata(title: str, year=None, quality=None, default_id=N
                 backdrop = f"https://image.tmdb.org/t/p/original{force_movie_details.backdrop_path}" if force_movie_details.backdrop_path else ''
                 poster = movie_details.get('image', '') or \
                          (f"https://image.tmdb.org/t/p/w500{force_movie_details.poster_path}" if force_movie_details.poster_path else '')
+                original_language = _tmdb_original_language(force_movie_details)
+                origin_country = _tmdb_origin_country(force_movie_details)
+                production_countries = _tmdb_production_countries(force_movie_details)
+                content_tags = build_content_tags("movie", genres, original_language, origin_country, production_countries)
             except Exception as e:
                 backdrop = ''
                 poster = ''
@@ -594,6 +682,10 @@ async def fetch_movie_metadata(title: str, year=None, quality=None, default_id=N
             "trailer_url": trailer_url,
             "cast": cast,
             "watch_providers": watch_providers,
+            "original_language": original_language,
+            "origin_country": origin_country,
+            "production_countries": production_countries,
+            "content_tags": content_tags,
             "media_type": "movie",
             "genres": genres,
             "runtime": runtime,
