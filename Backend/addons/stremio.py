@@ -26,6 +26,7 @@ FEATURED_GENRES = [
     "Science Fiction", "Crime", "Fantasy",
 ]
 ANIME_GENRE = "Animation"
+KDRAMA_LANGUAGES = ["ko", "Korean"]
 LANGUAGE_CATALOGS = {
     "xstream-hindi": "Hindi",
     "xstream-english": "English",
@@ -46,6 +47,7 @@ CATALOGS = {
     "xstream-popular-series": {"type": "series", "name": "Popular", "source": "sort", "sort": [("popularity", "desc"), ("rating", "desc")]},
     "xstream-editors-movies": {"type": "movie", "name": "Editors Choice", "source": "editors", "poster_shape": "landscape"},
     "xstream-editors-series": {"type": "series", "name": "Editors Choice", "source": "editors", "poster_shape": "landscape"},
+    "xstream-kdrama-series": {"type": "series", "name": "K-Drama", "source": "kdrama", "poster_shape": "landscape"},
     "xstream-anime-movies": {"type": "movie", "name": "Anime", "source": "genre", "genre": ANIME_GENRE, "poster_shape": "landscape"},
     "xstream-anime-series": {"type": "series", "name": "Anime", "source": "genre", "genre": ANIME_GENRE, "poster_shape": "landscape"},
 }
@@ -59,6 +61,9 @@ for genre in FEATURED_GENRES:
         "genre": genre,
         "poster_shape": "landscape",
     }
+    if genre == "Romance":
+        continue
+
     CATALOGS[f"xstream-genre-{catalog_slug}-series"] = {
         "type": "series",
         "name": genre,
@@ -238,19 +243,12 @@ def _full_meta(document: Dict[str, Any]) -> Dict[str, Any]:
     meta = _preview_meta(document)
     meta.update({
         "runtime": document.get("runtime"),
-        "trailers": _trailers(document.get("trailer_url")),
     })
 
     if meta["type"] == "series":
         meta["videos"] = _series_videos(document)
 
     return {key: value for key, value in meta.items() if value not in (None, "", [])}
-
-
-def _trailers(trailer_url: Optional[str]) -> List[Dict[str, str]]:
-    if not trailer_url:
-        return []
-    return [{"source": str(trailer_url).strip(), "type": "Trailer"}]
 
 
 def _series_videos(document: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -465,6 +463,14 @@ async def _catalog_items(content_type: str, catalog_definition: Dict[str, Any], 
     if source == "trending":
         return await _trending_items(content_type, skip, genre)
 
+    if source == "kdrama":
+        return await _collection_items(
+            "series",
+            page,
+            language=KDRAMA_LANGUAGES,
+            sort_params=[("rating", "desc"), ("updated_on", "desc")],
+        )
+
     if source == "language":
         return await _collection_items(
             content_type,
@@ -536,7 +542,7 @@ async def _collection_items(
     content_type: str,
     page: int,
     genre: Optional[str] = None,
-    language: Optional[str] = None,
+    language: Optional[Any] = None,
     quality: Optional[str] = None,
     sort_params: Optional[List[Tuple[str, str]]] = None,
 ) -> List[Dict[str, Any]]:
@@ -549,14 +555,25 @@ async def _collection_items(
     if genre:
         query["genres"] = _exact_text_regex(genre)
     if language:
-        query["languages"] = _exact_text_regex(language)
+        if isinstance(language, (list, tuple, set)):
+            language_options = [
+                {"languages": _exact_text_regex(str(item))}
+                for item in language
+            ]
+            query.setdefault("$and", []).append({"$or": language_options})
+        else:
+            query["languages"] = _exact_text_regex(str(language))
     if quality and content_type == "movie":
         query["telegram.quality"] = _quality_regex(quality)
     elif quality:
-        query["$or"] = [
+        quality_query = {"$or": [
             {"seasons.episodes.telegram.quality": _quality_regex(quality)},
             {"seasons.packs.telegram.quality": _quality_regex(quality)},
-        ]
+        ]}
+        if "$and" in query:
+            query["$and"].append(quality_query)
+        else:
+            query.update(quality_query)
 
     cursor = collection.find(query).sort(_mongo_sort(sort_params or [("updated_on", "desc"), ("rating", "desc")])).skip(skip).limit(PAGE_SIZE)
     return [db._convert_object_id(item) for item in await cursor.to_list(PAGE_SIZE)]
