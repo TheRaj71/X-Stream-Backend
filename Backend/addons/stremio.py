@@ -1,4 +1,3 @@
-import re
 from math import floor
 from re import escape
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -16,7 +15,6 @@ ADDON_ID = "org.xstream.backend"
 ADDON_NAME = "X-Stream"
 CATALOG_MOVIES = "xstream-movies"
 CATALOG_SERIES = "xstream-series"
-COMBINED_CATALOG_TYPE = "movie"
 PAGE_SIZE = 50
 GENRE_OPTIONS = [
     "Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary",
@@ -24,10 +22,10 @@ GENRE_OPTIONS = [
     "Romance", "Science Fiction", "Thriller", "War", "Western",
 ]
 FEATURED_GENRES = [
-    "Action", "Comedy", "Drama", "Horror", "Romance", "Science Fiction",
-    "Thriller", "Crime", "Fantasy",
+    "Action", "Romance", "Comedy", "Thriller", "Horror", "Drama",
+    "Science Fiction", "Crime", "Fantasy",
 ]
-COMBINED_GENRE_CATALOGS = {"anime": ("Anime", "Animation")}
+ANIME_GENRE = "Animation"
 LANGUAGE_CATALOGS = {
     "xstream-hindi": "Hindi",
     "xstream-english": "English",
@@ -38,23 +36,36 @@ QUALITY_CATALOGS = {
     "xstream-4k": ("2160p|4k|uhd", "4K Picks"),
 }
 CATALOGS = {
-    "xstream-trending": {
-        "type": COMBINED_CATALOG_TYPE,
-        "name": "Trending",
-        "source": "trending",
-        "content_types": ["movie", "series"],
-        "poster_shape": "landscape",
-    },
-    "xstream-editors-movies": {"type": "movie", "name": "Editors Choice", "source": "editors", "poster_shape": "landscape"},
-    "xstream-editors-series": {"type": "series", "name": "Editors Choice", "source": "editors", "poster_shape": "landscape"},
+    "xstream-trending-movies": {"type": "movie", "name": "Trending", "source": "trending", "poster_shape": "landscape"},
+    "xstream-trending-series": {"type": "series", "name": "Trending", "source": "trending", "poster_shape": "landscape"},
     CATALOG_MOVIES: {"type": "movie", "name": "Latest", "source": "sort", "sort": [("updated_on", "desc")]},
     CATALOG_SERIES: {"type": "series", "name": "Latest", "source": "sort", "sort": [("updated_on", "desc")]},
     "xstream-top-movies": {"type": "movie", "name": "Top Rated", "source": "sort", "sort": [("rating", "desc"), ("vote_count", "desc")]},
     "xstream-top-series": {"type": "series", "name": "Top Rated", "source": "sort", "sort": [("rating", "desc"), ("vote_count", "desc")]},
     "xstream-popular-movies": {"type": "movie", "name": "Popular", "source": "sort", "sort": [("popularity", "desc"), ("rating", "desc")]},
     "xstream-popular-series": {"type": "series", "name": "Popular", "source": "sort", "sort": [("popularity", "desc"), ("rating", "desc")]},
-    "xstream-season-packs": {"type": "series", "name": "Season Packs", "source": "season_packs", "poster_shape": "landscape"},
+    "xstream-editors-movies": {"type": "movie", "name": "Editors Choice", "source": "editors", "poster_shape": "landscape"},
+    "xstream-editors-series": {"type": "series", "name": "Editors Choice", "source": "editors", "poster_shape": "landscape"},
+    "xstream-anime-movies": {"type": "movie", "name": "Anime", "source": "genre", "genre": ANIME_GENRE, "poster_shape": "landscape"},
+    "xstream-anime-series": {"type": "series", "name": "Anime", "source": "genre", "genre": ANIME_GENRE, "poster_shape": "landscape"},
 }
+
+for genre in FEATURED_GENRES:
+    catalog_slug = genre.lower().replace(" ", "-")
+    CATALOGS[f"xstream-genre-{catalog_slug}-movies"] = {
+        "type": "movie",
+        "name": genre,
+        "source": "genre",
+        "genre": genre,
+        "poster_shape": "landscape",
+    }
+    CATALOGS[f"xstream-genre-{catalog_slug}-series"] = {
+        "type": "series",
+        "name": genre,
+        "source": "genre",
+        "genre": genre,
+        "poster_shape": "landscape",
+    }
 
 for catalog_id, language in LANGUAGE_CATALOGS.items():
     CATALOGS[f"{catalog_id}-movies"] = {
@@ -86,26 +97,12 @@ for catalog_id, (quality, name) in QUALITY_CATALOGS.items():
         "poster_shape": "landscape",
     }
 
-for slug, (name, genre) in COMBINED_GENRE_CATALOGS.items():
-    CATALOGS[f"xstream-{slug}"] = {
-        "type": COMBINED_CATALOG_TYPE,
-        "name": name,
-        "source": "genre",
-        "genre": genre,
-        "content_types": ["movie", "series"],
-        "poster_shape": "landscape",
-    }
-
-for genre in FEATURED_GENRES:
-    catalog_slug = genre.lower().replace(" ", "-")
-    CATALOGS[f"xstream-genre-{catalog_slug}"] = {
-        "type": COMBINED_CATALOG_TYPE,
-        "name": genre,
-        "source": "genre",
-        "genre": genre,
-        "content_types": ["movie", "series"],
-        "poster_shape": "landscape",
-    }
+CATALOGS["xstream-season-packs"] = {
+    "type": "series",
+    "name": "Season Packs",
+    "source": "season_packs",
+    "poster_shape": "landscape",
+}
 
 
 def _as_dict(value: Any) -> Dict[str, Any]:
@@ -208,24 +205,6 @@ def _mongo_sort(sort_params: List[Tuple[str, str]]) -> List[Tuple[str, int]]:
     return [(field, -1 if direction == "desc" else 1) for field, direction in sort_params]
 
 
-def _sort_value(document: Dict[str, Any], field: str) -> Tuple[int, Any]:
-    value = document.get(field)
-    if value is None:
-        return (0, "")
-    if isinstance(value, (int, float)):
-        return (3, value)
-    if hasattr(value, "timestamp"):
-        return (3, value.timestamp())
-    return (2, str(value).lower())
-
-
-def _sort_documents(items: List[Dict[str, Any]], sort_params: List[Tuple[str, str]]) -> List[Dict[str, Any]]:
-    sorted_items = list(items)
-    for field, direction in reversed(sort_params):
-        sorted_items.sort(key=lambda item: _sort_value(item, field), reverse=direction == "desc")
-    return sorted_items
-
-
 def _image_url(value: Any) -> Optional[str]:
     if not value:
         return None
@@ -256,18 +235,10 @@ def _preview_meta(document: Dict[str, Any], poster_shape: str = "poster") -> Dic
 
 
 def _full_meta(document: Dict[str, Any]) -> Dict[str, Any]:
-    cast_people = _cast_people(document.get("cast"))
     meta = _preview_meta(document)
     meta.update({
         "runtime": document.get("runtime"),
         "trailers": _trailers(document.get("trailer_url")),
-        "cast": [person["name"] for person in cast_people],
-        "castDetails": cast_people,
-        "castImages": [
-            {"name": person["name"], "image": person["profile"]}
-            for person in cast_people
-            if person.get("profile")
-        ],
     })
 
     if meta["type"] == "series":
@@ -277,58 +248,9 @@ def _full_meta(document: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _trailers(trailer_url: Optional[str]) -> List[Dict[str, str]]:
-    youtube_id = _youtube_id(trailer_url)
-    if not youtube_id:
-        return []
-    return [{"source": youtube_id, "type": "Trailer"}]
-
-
-def _youtube_id(trailer_url: Optional[str]) -> Optional[str]:
     if not trailer_url:
-        return None
-
-    trailer_url = trailer_url.strip()
-    if re.fullmatch(r"[A-Za-z0-9_-]{11}", trailer_url):
-        return trailer_url
-
-    patterns = [
-        r"youtu\.be/([A-Za-z0-9_-]{11})",
-        r"youtube\.com/embed/([A-Za-z0-9_-]{11})",
-        r"youtube\.com/shorts/([A-Za-z0-9_-]{11})",
-        r"[?&]v=([A-Za-z0-9_-]{11})",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, trailer_url)
-        if match:
-            return match.group(1)
-    return None
-
-
-def _cast_people(cast: Any) -> List[Dict[str, str]]:
-    people: List[Dict[str, str]] = []
-    if isinstance(cast, dict):
-        cast = cast.get("cast") or cast.get("results") or cast.get("people") or []
-
-    for person in cast or []:
-        if isinstance(person, str):
-            name = person
-            character = ""
-            profile = ""
-        elif isinstance(person, dict):
-            name = person.get("name") or person.get("original_name") or person.get("character")
-            character = person.get("character") or ""
-            profile = person.get("profile") or person.get("profile_path") or person.get("image") or person.get("poster") or ""
-        else:
-            name = None
-
-        if name:
-            people.append({
-                "name": str(name),
-                "character": str(character),
-                "profile": _image_url(profile) or "",
-            })
-
-    return people[:12]
+        return []
+    return [{"source": str(trailer_url).strip(), "type": "Trailer"}]
 
 
 def _series_videos(document: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -527,10 +449,9 @@ async def _catalog_items(content_type: str, catalog_definition: Dict[str, Any], 
 
     if search:
         results = await db.search_documents(query=search, page=page, page_size=PAGE_SIZE)
-        content_types = catalog_definition.get("content_types") or [content_type]
         return [
             item for item in results.get("results", [])
-            if _stremio_type(item) in content_types and _matches_genre(item, genre)
+            if _stremio_type(item) == content_type and _matches_genre(item, genre)
         ]
 
     source = catalog_definition["source"]
@@ -542,7 +463,7 @@ async def _catalog_items(content_type: str, catalog_definition: Dict[str, Any], 
         return await _editors_choice_items(content_type, page, genre)
 
     if source == "trending":
-        return await _trending_items(catalog_definition.get("content_types") or [content_type], skip, genre)
+        return await _trending_items(content_type, skip, genre)
 
     if source == "language":
         return await _collection_items(
@@ -561,12 +482,6 @@ async def _catalog_items(content_type: str, catalog_definition: Dict[str, Any], 
         )
 
     if source == "genre":
-        if catalog_definition.get("content_types"):
-            return await _mixed_collection_items(
-                page,
-                genre=catalog_definition.get("genre") or genre,
-                sort_params=[("rating", "desc"), ("updated_on", "desc")],
-            )
         return await _collection_items(
             content_type,
             page,
@@ -608,38 +523,13 @@ async def _editors_choice_items(content_type: str, page: int, genre: Optional[st
     return [item for item in results.get(_result_key(content_type), []) if _matches_genre(item, genre)]
 
 
-async def _trending_items(content_types: List[str], skip: int, genre: Optional[str]) -> List[Dict[str, Any]]:
+async def _trending_items(content_type: str, skip: int, genre: Optional[str]) -> List[Dict[str, Any]]:
     results = await db.get_trending()
     items = [
         item for item in results.get("results", [])
-        if _stremio_type(item) in content_types and _matches_genre(item, genre)
+        if _stremio_type(item) == content_type and _matches_genre(item, genre)
     ]
     return items[skip:skip + PAGE_SIZE]
-
-
-async def _mixed_collection_items(
-    page: int,
-    genre: Optional[str] = None,
-    language: Optional[str] = None,
-    quality: Optional[str] = None,
-    sort_params: Optional[List[Tuple[str, str]]] = None,
-) -> List[Dict[str, Any]]:
-    sort_params = sort_params or [("updated_on", "desc"), ("rating", "desc")]
-    query_size = page * PAGE_SIZE
-    items: List[Dict[str, Any]] = []
-    for content_type in ("movie", "series"):
-        items.extend(await _collection_items(
-            content_type,
-            page=1,
-            genre=genre,
-            language=language,
-            quality=quality,
-            sort_params=sort_params,
-            page_size=query_size,
-        ))
-
-    skip = (page - 1) * PAGE_SIZE
-    return _sort_documents(items, sort_params)[skip:skip + PAGE_SIZE]
 
 
 async def _collection_items(
@@ -649,9 +539,8 @@ async def _collection_items(
     language: Optional[str] = None,
     quality: Optional[str] = None,
     sort_params: Optional[List[Tuple[str, str]]] = None,
-    page_size: int = PAGE_SIZE,
 ) -> List[Dict[str, Any]]:
-    skip = (page - 1) * page_size
+    skip = (page - 1) * PAGE_SIZE
     collection = db.movie_collection if content_type == "movie" else db.tv_collection
     if collection is None:
         return []
@@ -669,8 +558,8 @@ async def _collection_items(
             {"seasons.packs.telegram.quality": _quality_regex(quality)},
         ]
 
-    cursor = collection.find(query).sort(_mongo_sort(sort_params or [("updated_on", "desc"), ("rating", "desc")])).skip(skip).limit(page_size)
-    return [db._convert_object_id(item) for item in await cursor.to_list(page_size)]
+    cursor = collection.find(query).sort(_mongo_sort(sort_params or [("updated_on", "desc"), ("rating", "desc")])).skip(skip).limit(PAGE_SIZE)
+    return [db._convert_object_id(item) for item in await cursor.to_list(PAGE_SIZE)]
 
 
 async def _season_pack_items(page: int, genre: Optional[str]) -> List[Dict[str, Any]]:
