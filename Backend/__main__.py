@@ -16,7 +16,7 @@ loop = get_event_loop()
 
 def keep_awake():
     """Keep the Render service alive by pinging it periodically"""
-    render_url = "https://x-stream-backend.onrender.com"
+    render_url = "https://x-stream-backend-yqsc.onrender.com"
     while True:
         try:
             response = requests.get(render_url, timeout=30)
@@ -32,10 +32,10 @@ async def start_services():
     try:
         LOGGER.info(f"Initializing Project-Stream v-{__version__}")
         await asleep(1.2)
-        
+
         await db.connect()
         await asleep(1.2)
-        
+
         await StreamBot.start()
         StreamBot.username = StreamBot.me.username
         LOGGER.info(f"Bot Client : [@{StreamBot.username}]")
