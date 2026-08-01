@@ -308,9 +308,6 @@ class AppwriteAdmin:
             if not user or user.get("$id") != user_id or user.get("status") is not True:
                 return None
 
-            if not self.has_active_subscription(user_id, email):
-                return None
-
             return user
         except Exception:
             return None

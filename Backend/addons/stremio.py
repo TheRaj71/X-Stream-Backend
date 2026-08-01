@@ -119,16 +119,16 @@ def _as_dict(value: Any) -> Dict[str, Any]:
 
 
 def _absolute_base_url(request: Request) -> str:
-    request_host = request.url.hostname or ""
-    request_url = str(request.base_url).rstrip("/")
-    if request_host and request_host not in ("0.0.0.0", "127.0.0.1", "localhost"):
-        return request_url
-
+    # Prefer the configured public Render URL so generated links stay HTTPS behind the proxy.
     configured_url = Telegram.BASE_URL
     if configured_url and configured_url not in ("0.0.0.0", "127.0.0.1", "localhost"):
         return configured_url.rstrip("/")
-    return request_url
 
+    forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    forwarded_proto = request.headers.get("x-forwarded-proto", request.url.scheme).split(",", 1)[0].strip()
+    if forwarded_host:
+        return f"{forwarded_proto}://{forwarded_host.rstrip('/') }"
+    return str(request.base_url).rstrip("/")
 
 def _clean_items(items: Iterable[Any]) -> List[Dict[str, Any]]:
     return [_as_dict(item) for item in items]
