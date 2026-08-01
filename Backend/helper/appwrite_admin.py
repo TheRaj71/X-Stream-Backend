@@ -14,6 +14,7 @@ from appwrite.client import Client
 from appwrite.exception import AppwriteException
 from appwrite.id import ID
 from appwrite.query import Query
+from appwrite.services.account import Account
 from appwrite.services.tables_db import TablesDB
 from appwrite.services.users import Users
 
@@ -141,6 +142,18 @@ def _base64url_decode(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + padding)
 
 
+def _sdk_dict(value: Any) -> Dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "to_dict"):
+        return value.to_dict()
+    if hasattr(value, "dict"):
+        return value.dict()
+    return dict(value)
+
+
 class AppwriteAdmin:
     def __init__(self):
         missing = [
@@ -174,12 +187,12 @@ class AppwriteAdmin:
 
         if user is None:
             created_password = generate_password()
-            user = self.users.create(
+            user = _sdk_dict(self.users.create(
                 user_id=ID.unique(),
                 email=email,
                 password=created_password,
                 name=email.split("@", 1)[0],
-            )
+            ))
             created_user = True
 
         now_iso = self._to_appwrite_datetime(datetime.now(timezone.utc))
@@ -197,19 +210,19 @@ class AppwriteAdmin:
         }
 
         if existing_row:
-            row = self.tables.update_row(
+            row = _sdk_dict(self.tables.update_row(
                 database_id=self.database_id,
                 table_id=self.subscriptions_table_id,
                 row_id=existing_row["$id"],
                 data=row_data,
-            )
+            ))
         else:
-            row = self.tables.create_row(
+            row = _sdk_dict(self.tables.create_row(
                 database_id=self.database_id,
                 table_id=self.subscriptions_table_id,
                 row_id=user["$id"],
                 data={**row_data, "createdAt": now_iso},
-            )
+            ))
 
         return PremiumResult(
             user=user,
@@ -218,6 +231,17 @@ class AppwriteAdmin:
             created_user=created_user,
             created_password=created_password,
         )
+
+    def get_user_from_jwt(self, jwt: str) -> Dict[str, Any]:
+        jwt = (jwt or "").strip()
+        if not jwt:
+            raise AppwriteAdminError("Missing Appwrite JWT")
+
+        client = Client()
+        client.set_endpoint(Telegram.APPWRITE_ENDPOINT)
+        client.set_project(Telegram.APPWRITE_PROJECT_ID)
+        client.set_jwt(jwt)
+        return _sdk_dict(Account(client).get())
 
     def create_stremio_token(self, user: Dict[str, Any]) -> str:
         secret = self._stremio_secret()
@@ -325,7 +349,8 @@ class AppwriteAdmin:
         )
 
     def _get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
-        users = self.users.list(search=email, queries=[Query.limit(25)]).get("users", [])
+        users = _sdk_dict(self.users.list(search=email, queries=[Query.limit(25)])).get("users", [])
+        users = [_sdk_dict(user) for user in users]
         return next((user for user in users if user.get("email", "").lower() == email), None)
 
     def _first_subscription_row(self, user_id: str, email: str) -> Optional[Dict[str, Any]]:
@@ -373,12 +398,12 @@ class AppwriteAdmin:
         offset = 0
         limit = 100
         while True:
-            page = self.tables.list_rows(
+            page = _sdk_dict(self.tables.list_rows(
                 database_id=self.database_id,
                 table_id=table_id,
                 queries=[*queries, Query.limit(limit), Query.offset(offset)],
-            )
-            batch = page.get("rows", [])
+            ))
+            batch = [_sdk_dict(row) for row in page.get("rows", [])]
             rows.extend(batch)
             if len(batch) < limit:
                 return rows

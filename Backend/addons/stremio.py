@@ -4,7 +4,7 @@ from re import escape
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote, unquote_plus
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request
 
 from Backend import __version__, db
 from Backend.config import Telegram
@@ -119,10 +119,15 @@ def _as_dict(value: Any) -> Dict[str, Any]:
 
 
 def _absolute_base_url(request: Request) -> str:
+    request_host = request.url.hostname or ""
+    request_url = str(request.base_url).rstrip("/")
+    if request_host and request_host not in ("0.0.0.0", "127.0.0.1", "localhost"):
+        return request_url
+
     configured_url = Telegram.BASE_URL
     if configured_url and configured_url not in ("0.0.0.0", "127.0.0.1", "localhost"):
         return configured_url.rstrip("/")
-    return str(request.base_url).rstrip("/")
+    return request_url
 
 
 def _clean_items(items: Iterable[Any]) -> List[Dict[str, Any]]:
@@ -395,6 +400,33 @@ async def _authorized_stremio_user(access_token: Optional[str]) -> bool:
         return user is not None
     except Exception:
         return False
+
+
+def _bearer_token(authorization: Optional[str]) -> Optional[str]:
+    if not authorization:
+        return None
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+    return token.strip()
+
+
+@router.get("/addon-link")
+async def addon_link(request: Request, authorization: Optional[str] = Header(None)) -> Dict[str, str]:
+    jwt = _bearer_token(authorization)
+    if not jwt:
+        raise HTTPException(status_code=401, detail="Missing Appwrite JWT")
+
+    admin = AppwriteAdmin()
+    user = await to_thread(admin.get_user_from_jwt, jwt)
+    email = user.get("email", "").lower()
+    user_id = user.get("$id")
+
+    if not user_id or not email or not await to_thread(admin.has_active_subscription, user_id, email):
+        raise HTTPException(status_code=403, detail="Active premium subscription required")
+
+    token = await to_thread(admin.create_stremio_token, user)
+    return {"addonUrl": f"{_absolute_base_url(request)}/stremio/{token}/manifest.json"}
 
 
 async def _movie_streams(base_url: str, tmdb_id: int) -> List[Dict[str, Any]]:
