@@ -422,12 +422,6 @@ async def addon_link(request: Request, authorization: Optional[str] = Header(Non
         user = await to_thread(admin.get_user_from_jwt, jwt)
     except AppwriteAdminError as error:
         raise HTTPException(status_code=503, detail="Addon service configuration is incomplete") from error
-    email = user.get("email", "").lower()
-    user_id = user.get("$id")
-
-    if not user_id or not email or not await to_thread(admin.has_active_subscription, user_id, email):
-        raise HTTPException(status_code=403, detail="Active premium subscription required")
-
     token = await to_thread(admin.create_stremio_token, user)
     return {"addonUrl": f"{_absolute_base_url(request)}/stremio/{token}/manifest.json"}
 
