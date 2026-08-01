@@ -22,3 +22,11 @@ class Telegram:
     USE_TMDB = getenv("USE_TMDB", "False").lower() == "true"
     OWNER_ID = int(getenv("OWNER_ID", "5422223708"))
     USE_DEFAULT_ID = getenv("USE_DEFAULT_ID", None)
+    APPWRITE_ENDPOINT = getenv("APPWRITE_ENDPOINT", "https://fra.cloud.appwrite.io/v1").rstrip("/")
+    APPWRITE_PROJECT_ID = getenv("APPWRITE_PROJECT_ID", "")
+    APPWRITE_API_KEY = getenv("APPWRITE_API_KEY", "")
+    APPWRITE_DATABASE_ID = getenv("APPWRITE_DATABASE_ID", "clientportal")
+    APPWRITE_SUBSCRIPTIONS_TABLE_ID = getenv("APPWRITE_SUBSCRIPTIONS_TABLE_ID", "subscriptions")
+    APPWRITE_WATCHLIST_TABLE_ID = getenv("APPWRITE_WATCHLIST_TABLE_ID", "watchlist")
+    STREMIO_AUTH_REQUIRED = getenv("STREMIO_AUTH_REQUIRED", "False").lower() == "true"
+    STREMIO_AUTH_SECRET = getenv("STREMIO_AUTH_SECRET", "")

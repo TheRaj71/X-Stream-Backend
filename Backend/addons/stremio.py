@@ -1,3 +1,4 @@
+from asyncio import to_thread
 from math import floor
 from re import escape
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -7,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from Backend import __version__, db
 from Backend.config import Telegram
+from Backend.helper.appwrite_admin import AppwriteAdmin
 
 
 router = APIRouter(prefix="/stremio", tags=["stremio-addon"])
@@ -381,6 +383,20 @@ def _stream_items(base_url: str, items: Iterable[Dict[str, Any]], prefix: str = 
     return streams
 
 
+async def _authorized_stremio_user(access_token: Optional[str]) -> bool:
+    if not Telegram.STREMIO_AUTH_REQUIRED:
+        return True
+    if not access_token:
+        return False
+
+    try:
+        admin = AppwriteAdmin()
+        user = await to_thread(admin.verify_stremio_token, access_token)
+        return user is not None
+    except Exception:
+        return False
+
+
 async def _movie_streams(base_url: str, tmdb_id: int) -> List[Dict[str, Any]]:
     details = await db.get_media_details(tmdb_id=tmdb_id)
     if not details or details.get("type") != "movie":
@@ -433,8 +449,7 @@ def _pack_contains_episode(pack: Dict[str, Any], episode_number: int) -> bool:
     )
 
 
-@router.get("/manifest.json")
-async def manifest() -> Dict[str, Any]:
+def _manifest_payload(authenticated: bool = True) -> Dict[str, Any]:
     catalogs = [
         {
             "type": definition["type"],
@@ -443,7 +458,7 @@ async def manifest() -> Dict[str, Any]:
             "extra": _catalog_extra(),
         }
         for catalog_id, definition in CATALOGS.items()
-    ]
+    ] if authenticated else []
 
     return {
         "id": ADDON_ID,
@@ -458,9 +473,25 @@ async def manifest() -> Dict[str, Any]:
     }
 
 
+@router.get("/manifest.json")
+async def manifest() -> Dict[str, Any]:
+    return _manifest_payload(authenticated=not Telegram.STREMIO_AUTH_REQUIRED)
+
+
+@router.get("/{access_token}/manifest.json")
+async def authenticated_manifest(access_token: str) -> Dict[str, Any]:
+    return _manifest_payload(authenticated=await _authorized_stremio_user(access_token))
+
+
 @router.get("/catalog/{content_type}/{catalog_id}.json")
 @router.get("/catalog/{content_type}/{catalog_id}/{extra}.json")
 async def catalog(content_type: str, catalog_id: str, extra: Optional[str] = None) -> Dict[str, Any]:
+    if not await _authorized_stremio_user(None):
+        return {"metas": []}
+    return await _catalog_response(content_type, catalog_id, extra)
+
+
+async def _catalog_response(content_type: str, catalog_id: str, extra: Optional[str] = None) -> Dict[str, Any]:
     params = _parse_extra(extra)
     catalog_definition = CATALOGS.get(catalog_id)
 
@@ -473,6 +504,19 @@ async def catalog(content_type: str, catalog_id: str, extra: Optional[str] = Non
     items = await _catalog_items(content_type, catalog_definition, params)
     poster_shape = catalog_definition.get("poster_shape", "poster")
     return {"metas": [_preview_meta(item, poster_shape=poster_shape) for item in items]}
+
+
+@router.get("/{access_token}/catalog/{content_type}/{catalog_id}.json")
+@router.get("/{access_token}/catalog/{content_type}/{catalog_id}/{extra}.json")
+async def authenticated_catalog(
+    access_token: str,
+    content_type: str,
+    catalog_id: str,
+    extra: Optional[str] = None,
+) -> Dict[str, Any]:
+    if not await _authorized_stremio_user(access_token):
+        return {"metas": []}
+    return await _catalog_response(content_type, catalog_id, extra)
 
 
 async def _catalog_items(content_type: str, catalog_definition: Dict[str, Any], params: Dict[str, str]) -> List[Dict[str, Any]]:
@@ -643,6 +687,12 @@ async def _season_pack_items(page: int, genre: Optional[str]) -> List[Dict[str, 
 
 @router.get("/meta/{content_type}/{stremio_id}.json")
 async def meta(content_type: str, stremio_id: str) -> Dict[str, Any]:
+    if not await _authorized_stremio_user(None):
+        return {"meta": None}
+    return await _meta_response(content_type, stremio_id)
+
+
+async def _meta_response(content_type: str, stremio_id: str) -> Dict[str, Any]:
     tmdb_id, _, _ = _parse_stremio_id(stremio_id)
     details = await db.get_media_details(tmdb_id=tmdb_id)
     if not details:
@@ -655,8 +705,21 @@ async def meta(content_type: str, stremio_id: str) -> Dict[str, Any]:
     return {"meta": _full_meta(details)}
 
 
+@router.get("/{access_token}/meta/{content_type}/{stremio_id}.json")
+async def authenticated_meta(access_token: str, content_type: str, stremio_id: str) -> Dict[str, Any]:
+    if not await _authorized_stremio_user(access_token):
+        return {"meta": None}
+    return await _meta_response(content_type, stremio_id)
+
+
 @router.get("/stream/{content_type}/{stremio_id}.json")
 async def stream(request: Request, content_type: str, stremio_id: str) -> Dict[str, Any]:
+    if not await _authorized_stremio_user(None):
+        return {"streams": []}
+    return await _stream_response(request, content_type, stremio_id)
+
+
+async def _stream_response(request: Request, content_type: str, stremio_id: str) -> Dict[str, Any]:
     tmdb_id, season_number, episode_number = _parse_stremio_id(stremio_id)
     base_url = _absolute_base_url(request)
 
@@ -668,3 +731,10 @@ async def stream(request: Request, content_type: str, stremio_id: str) -> Dict[s
         streams = []
 
     return {"streams": streams}
+
+
+@router.get("/{access_token}/stream/{content_type}/{stremio_id}.json")
+async def authenticated_stream(request: Request, access_token: str, content_type: str, stremio_id: str) -> Dict[str, Any]:
+    if not await _authorized_stremio_user(access_token):
+        return {"streams": []}
+    return await _stream_response(request, content_type, stremio_id)

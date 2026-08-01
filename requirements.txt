@@ -7,6 +7,7 @@ parse-torrent-title
 requests
 jinja2
 motor
+appwrite
 themoviedb
 pytz
 pycountry

@@ -4,6 +4,7 @@ from Backend.logger import LOGGER
 from Backend import db
 from Backend.config import Telegram
 from Backend.helper.custom_filter import CustomFilters
+from Backend.helper.appwrite_admin import AppwriteAdmin, describe_appwrite_error, format_remaining_duration
 from Backend.helper.encrypt import decode_string
 from Backend.helper.metadata import metadata
 from Backend.helper.pyro import clean_filename, get_readable_file_size, remove_urls
@@ -14,7 +15,7 @@ from os import path as ospath
 from pyrogram.errors import FloodWait
 from pyrogram.enums.parse_mode import ParseMode
 from themoviedb import aioTMDb
-from asyncio import Queue, create_task
+from asyncio import Queue, create_task, to_thread
 from os import execl as osexecl
 from asyncio import create_subprocess_exec, gather
 from sys import executable
@@ -34,6 +35,39 @@ pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 def generate_password(length=10):
     chars = string.ascii_letters + string.digits
     return ''.join(random.choice(chars) for _ in range(length))
+
+def stremio_manifest_url(token: str) -> str:
+    base_url = Telegram.BASE_URL
+    if not base_url or base_url in ("0.0.0.0", "127.0.0.1", "localhost"):
+        return f"/stremio/{token}/manifest.json"
+    return f"{base_url.rstrip('/')}/stremio/{token}/manifest.json"
+
+@StreamBot.on_message(filters.command("help") & filters.private & CustomFilters.owner)
+async def owner_help(bot: Client, message: Message):
+    await message.reply_text(
+        "**X-Stream Owner Commands**\n\n"
+        "**Premium members**\n"
+        "`/premium <email> <duration|date>` - create/update premium access\n"
+        "`/pinfo <email>` - show user, subscription, remaining time, and Stremio/Nuvio link\n"
+        "`/pdelete <email>` - delete Appwrite user, subscription rows, and watchlist rows\n\n"
+        "**Duration examples**\n"
+        "`30m`, `10 minutes`, `12h`, `7d`, `2026-12-31`\n\n"
+        "**Backend controls**\n"
+        "`/restart` - restart backend\n"
+        "`/log` - send backend log file\n"
+        "`/caption` - toggle caption parsing\n"
+        "`/tmdb` - toggle TMDB/IMDB metadata\n"
+        "`/set <url>` - set default URL, or `/set` to remove it\n\n"
+        "**Trending**\n"
+        "`/pin [slot] <media>` - pin media to trending\n"
+        "`/unpin <slot>` - remove a trending slot\n"
+        "`/move <from> <to>` - move a trending item\n"
+        "`/trending` - list trending slots\n"
+        "`/delete <mov|ser> <tmdb_id>` - delete media from database\n\n"
+        "**Legacy local auth**\n"
+        "`/user <username> <expiry_days>` - create old Mongo auth user",
+        parse_mode=ParseMode.MARKDOWN,
+    )
 
 @StreamBot.on_message(filters.command("user") & filters.private & CustomFilters.owner)
 async def create_user(bot: Client, message: Message):
@@ -77,6 +111,120 @@ async def create_user(bot: Client, message: Message):
     except Exception as e:
         LOGGER.error(f"Error in /user command: {e}")
         await message.reply_text("❌ An error occurred while creating the user.")
+
+@StreamBot.on_message(filters.command("premium") & filters.private & CustomFilters.owner)
+async def grant_premium(bot: Client, message: Message):
+    try:
+        args = message.text.split()
+        if len(args) < 3:
+            await message.reply_text(
+                "❌ Usage: `/premium <email> <duration|date>`\n\n"
+                "Examples:\n"
+                "`/premium user@example.com 30m`\n"
+                "`/premium user@example.com 10 minutes`\n"
+                "`/premium user@example.com 12h`\n"
+                "`/premium user@example.com 7d`\n"
+                "`/premium user@example.com 2026-12-31`",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+
+        admin = AppwriteAdmin()
+        result = await to_thread(admin.grant_premium, args[1], " ".join(args[2:]))
+        stremio_token = await to_thread(admin.create_stremio_token, result.user)
+        expiry_text = result.expiry_date.strftime("%Y-%m-%d %H:%M:%S UTC")
+        response = (
+            "✅ Premium access updated!\n\n"
+            f"📧 Email: `{result.user['email']}`\n"
+            f"👤 User ID: `{result.user['$id']}`\n"
+            f"📅 Expiry: `{expiry_text}`\n"
+            f"📺 Stremio/Nuvio: `{stremio_manifest_url(stremio_token)}`"
+        )
+        if result.created_user and result.created_password:
+            response += f"\n🔑 Temporary Password: `{result.created_password}`"
+
+        await message.reply_text(response, parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        LOGGER.error(f"Error in /premium command: {e}")
+        await message.reply_text(f"❌ {describe_appwrite_error(e)}")
+
+@StreamBot.on_message(filters.command("pdelete") & filters.private & CustomFilters.owner)
+async def delete_premium_member(bot: Client, message: Message):
+    try:
+        args = message.text.split()
+        if len(args) != 2:
+            await message.reply_text("❌ Usage: `/pdelete <email>`", parse_mode=ParseMode.MARKDOWN)
+            return
+
+        admin = AppwriteAdmin()
+        result = await to_thread(admin.delete_member, args[1])
+        user_status = "deleted" if result.deleted_user else "not found"
+        await message.reply_text(
+            "✅ Member cleanup complete!\n\n"
+            f"📧 Email: `{result.email}`\n"
+            f"👤 Auth user: `{user_status}`\n"
+            f"🧾 Subscription rows deleted: `{result.deleted_subscriptions}`\n"
+            f"⭐ Watchlist rows deleted: `{result.deleted_watchlist_items}`",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+    except Exception as e:
+        LOGGER.error(f"Error in /pdelete command: {e}")
+        await message.reply_text(f"❌ {describe_appwrite_error(e)}")
+
+@StreamBot.on_message(filters.command("pinfo") & filters.private & CustomFilters.owner)
+async def premium_member_info(bot: Client, message: Message):
+    try:
+        args = message.text.split()
+        if len(args) != 2:
+            await message.reply_text("❌ Usage: `/pinfo <email>`", parse_mode=ParseMode.MARKDOWN)
+            return
+
+        admin = AppwriteAdmin()
+        info = await to_thread(admin.get_member_info, args[1])
+
+        if not info.user and not info.subscriptions:
+            await message.reply_text(f"❌ No Appwrite user or subscription found for `{info.email}`.", parse_mode=ParseMode.MARKDOWN)
+            return
+
+        lines = [
+            "ℹ️ Premium member info",
+            "",
+            f"📧 Email: `{info.email}`",
+            f"👤 Auth user: `{'found' if info.user else 'not found'}`",
+        ]
+
+        if info.user:
+            lines.extend([
+                f"🆔 User ID: `{info.user.get('$id')}`",
+                f"✅ User enabled/status: `{info.user.get('status')}`",
+                f"✉️ Email verified: `{info.user.get('emailVerification')}`",
+                f"📅 Created: `{info.user.get('$createdAt')}`",
+                f"🕒 Updated: `{info.user.get('$updatedAt')}`",
+            ])
+            if info.stremio_token:
+                lines.append(f"📺 Stremio/Nuvio: `{stremio_manifest_url(info.stremio_token)}`")
+
+        lines.append(f"⭐ Watchlist rows: `{info.watchlist_count}`")
+        lines.append(f"🧾 Subscription rows: `{len(info.subscriptions)}`")
+
+        for index, row in enumerate(info.subscriptions, start=1):
+            lines.extend([
+                "",
+                f"Subscription #{index}",
+                f"• Row ID: `{row.get('$id')}`",
+                f"• Type: `{row.get('subscriptionType')}`",
+                f"• Status: `{row.get('subscriptionStatus')}`",
+                f"• isActive: `{row.get('isActive')}`",
+                f"• Start: `{row.get('startDate')}`",
+                f"• Expiry: `{row.get('expiryDate')}`",
+                f"• Remaining: `{format_remaining_duration(row.get('expiryDate'))}`",
+                f"• Updated: `{row.get('updatedAt')}`",
+            ])
+
+        await message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        LOGGER.error(f"Error in /pinfo command: {e}")
+        await message.reply_text(f"❌ {describe_appwrite_error(e)}")
 
 @StreamBot.on_message(filters.command('restart') & filters.private & CustomFilters.owner)
 async def restart(bot: Client, message: Message):
