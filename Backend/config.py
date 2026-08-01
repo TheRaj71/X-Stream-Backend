@@ -10,7 +10,14 @@ class Telegram:
     API_HASH = getenv("API_HASH", "")
     BOT_TOKEN = getenv("BOT_TOKEN", "")
     PORT = int(getenv("PORT", "8000"))
-    BASE_URL = getenv("BASE_URL", "0.0.0.0").rstrip('/')
+    # Render provides RENDER_EXTERNAL_URL for deployed services. PUBLIC_BASE_URL
+    # is available for any other host or a custom domain.
+    BASE_URL = (
+        getenv("PUBLIC_BASE_URL")
+        or getenv("RENDER_EXTERNAL_URL")
+        or getenv("BASE_URL")
+        or "0.0.0.0"
+    ).rstrip('/')
     AUTH_CHANNEL = [channel.strip() for channel in (getenv("AUTH_CHANNEL") or "").split(",") if channel.strip()]
     DATABASE = getenv("DATABASE", "")
     TMDB_API = getenv("TMDB_API", "")
