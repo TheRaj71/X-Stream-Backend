@@ -8,7 +8,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 
 from Backend import __version__, db
 from Backend.config import Telegram
-from Backend.helper.appwrite_admin import AppwriteAdmin
+from Backend.helper.appwrite_admin import AppwriteAdmin, AppwriteAdminError
 
 
 router = APIRouter(prefix="/stremio", tags=["stremio-addon"])
@@ -417,8 +417,11 @@ async def addon_link(request: Request, authorization: Optional[str] = Header(Non
     if not jwt:
         raise HTTPException(status_code=401, detail="Missing Appwrite JWT")
 
-    admin = AppwriteAdmin()
-    user = await to_thread(admin.get_user_from_jwt, jwt)
+    try:
+        admin = AppwriteAdmin()
+        user = await to_thread(admin.get_user_from_jwt, jwt)
+    except AppwriteAdminError as error:
+        raise HTTPException(status_code=503, detail="Addon service configuration is incomplete") from error
     email = user.get("email", "").lower()
     user_id = user.get("$id")
 

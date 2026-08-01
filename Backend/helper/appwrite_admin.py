@@ -39,6 +39,7 @@ class PremiumResult:
     row: Dict[str, Any]
     expiry_date: datetime
     created_user: bool
+    reactivated_user: bool
     created_password: Optional[str] = None
 
 
@@ -133,6 +134,21 @@ def format_remaining_duration(expiry_value: Optional[str]) -> str:
     return f"Expired {text} ago" if expired else text
 
 
+def format_expiry_time(expiry_value: Optional[str], timezone_name: str) -> str:
+    if not expiry_value:
+        return "No expiry"
+
+    try:
+        expiry_date = datetime.fromisoformat(str(expiry_value).replace("Z", "+00:00"))
+        if expiry_date.tzinfo is None:
+            expiry_date = expiry_date.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return "Invalid expiry date"
+
+    target_timezone = IST if timezone_name == "IST" else timezone.utc
+    return expiry_date.astimezone(target_timezone).strftime("%d %b %Y, %I:%M:%S %p %Z")
+
+
 def _base64url_encode(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
 
@@ -152,6 +168,17 @@ def _sdk_dict(value: Any) -> Dict[str, Any]:
     if hasattr(value, "dict"):
         return value.dict()
     return dict(value)
+
+
+def _row_dict(value: Any) -> Dict[str, Any]:
+    """Flatten TablesDB row data while keeping Appwrite metadata available."""
+    row = _sdk_dict(value)
+    data = row.get("data")
+    if data is None:
+        return row
+
+    flattened_data = _sdk_dict(data)
+    return {**row, **flattened_data}
 
 
 class AppwriteAdmin:
@@ -183,6 +210,7 @@ class AppwriteAdmin:
         expiry_date = parse_expiry(expiry_arg)
         user = self._get_user_by_email(email)
         created_user = False
+        reactivated_user = False
         created_password = None
 
         if user is None:
@@ -194,6 +222,9 @@ class AppwriteAdmin:
                 name=email.split("@", 1)[0],
             ))
             created_user = True
+        elif user.get("status") is not True:
+            user = _sdk_dict(self.users.update_status(user_id=user["$id"], status=True))
+            reactivated_user = True
 
         now_iso = self._to_appwrite_datetime(datetime.now(timezone.utc))
         expiry_iso = self._to_appwrite_datetime(expiry_date)
@@ -210,17 +241,17 @@ class AppwriteAdmin:
         }
 
         if existing_row:
-            row = _sdk_dict(self.tables.update_row(
+            row = _row_dict(self.tables.update_row(
                 database_id=self.database_id,
                 table_id=self.subscriptions_table_id,
                 row_id=existing_row["$id"],
                 data=row_data,
             ))
         else:
-            row = _sdk_dict(self.tables.create_row(
+            row = _row_dict(self.tables.create_row(
                 database_id=self.database_id,
                 table_id=self.subscriptions_table_id,
-                row_id=user["$id"],
+                row_id=ID.unique(),
                 data={**row_data, "createdAt": now_iso},
             ))
 
@@ -229,6 +260,7 @@ class AppwriteAdmin:
             row=row,
             expiry_date=expiry_date,
             created_user=created_user,
+            reactivated_user=reactivated_user,
             created_password=created_password,
         )
 
@@ -286,7 +318,9 @@ class AppwriteAdmin:
     def has_active_subscription(self, user_id: str, email: str) -> bool:
         now = datetime.now(timezone.utc)
         for row in self._subscription_rows(user_id, email):
-            if row.get("subscriptionStatus") != "active" or row.get("isActive") is not True:
+            status = str(row.get("subscriptionStatus") or "").lower()
+            is_active = row.get("isActive") is True or str(row.get("isActive")).lower() == "true"
+            if status != "active" or not is_active:
                 continue
 
             expiry_value = row.get("expiryDate")
@@ -355,7 +389,9 @@ class AppwriteAdmin:
 
     def _first_subscription_row(self, user_id: str, email: str) -> Optional[Dict[str, Any]]:
         rows = self._subscription_rows(user_id, email)
-        return rows[0] if rows else None
+        if not rows:
+            return None
+        return max(rows, key=lambda row: str(row.get("updatedAt") or row.get("$updatedAt") or ""))
 
     def _subscription_rows(self, user_id: Optional[str], email: str) -> List[Dict[str, Any]]:
         rows = []
@@ -403,7 +439,7 @@ class AppwriteAdmin:
                 table_id=table_id,
                 queries=[*queries, Query.limit(limit), Query.offset(offset)],
             ))
-            batch = [_sdk_dict(row) for row in page.get("rows", [])]
+            batch = [_row_dict(row) for row in page.get("rows", [])]
             rows.extend(batch)
             if len(batch) < limit:
                 return rows

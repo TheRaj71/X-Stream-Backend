@@ -4,7 +4,7 @@ from Backend.logger import LOGGER
 from Backend import db
 from Backend.config import Telegram
 from Backend.helper.custom_filter import CustomFilters
-from Backend.helper.appwrite_admin import AppwriteAdmin, describe_appwrite_error, format_remaining_duration
+from Backend.helper.appwrite_admin import AppwriteAdmin, describe_appwrite_error, format_expiry_time, format_remaining_duration
 from Backend.helper.encrypt import decode_string
 from Backend.helper.metadata import metadata
 from Backend.helper.pyro import clean_filename, get_readable_file_size, remove_urls
@@ -132,16 +132,23 @@ async def grant_premium(bot: Client, message: Message):
         admin = AppwriteAdmin()
         result = await to_thread(admin.grant_premium, args[1], " ".join(args[2:]))
         stremio_token = await to_thread(admin.create_stremio_token, result.user)
-        expiry_text = result.expiry_date.strftime("%Y-%m-%d %H:%M:%S UTC")
+        expiry_utc = format_expiry_time(result.row.get("expiryDate"), "UTC")
+        expiry_ist = format_expiry_time(result.row.get("expiryDate"), "IST")
         response = (
-            "✅ Premium access updated!\n\n"
+            "✅ Premium access updated successfully!\n\n"
             f"📧 Email: `{result.user['email']}`\n"
             f"👤 User ID: `{result.user['$id']}`\n"
-            f"📅 Expiry: `{expiry_text}`\n"
+            f"🟢 Subscription: `active`\n"
+            f"🔐 isActive: `true`\n"
+            f"📅 Expires (IST): `{expiry_ist}`\n"
+            f"🌐 Expires (UTC): `{expiry_utc}`\n"
+            f"🕒 Time remaining: `{format_remaining_duration(result.row.get('expiryDate'))}`\n"
             f"📺 Stremio/Nuvio: `{stremio_manifest_url(stremio_token)}`"
         )
         if result.created_user and result.created_password:
             response += f"\n🔑 Temporary Password: `{result.created_password}`"
+        elif result.reactivated_user:
+            response += "\n🔓 Existing Appwrite account was reactivated."
 
         await message.reply_text(response, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
@@ -215,8 +222,9 @@ async def premium_member_info(bot: Client, message: Message):
                 f"• Type: `{row.get('subscriptionType')}`",
                 f"• Status: `{row.get('subscriptionStatus')}`",
                 f"• isActive: `{row.get('isActive')}`",
-                f"• Start: `{row.get('startDate')}`",
-                f"• Expiry: `{row.get('expiryDate')}`",
+                f"• Start (IST): `{format_expiry_time(row.get('startDate'), 'IST')}`",
+                f"• Expiry (IST): `{format_expiry_time(row.get('expiryDate'), 'IST')}`",
+                f"• Expiry (UTC): `{format_expiry_time(row.get('expiryDate'), 'UTC')}`",
                 f"• Remaining: `{format_remaining_duration(row.get('expiryDate'))}`",
                 f"• Updated: `{row.get('updatedAt')}`",
             ])
