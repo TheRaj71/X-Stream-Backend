@@ -16,7 +16,7 @@ loop = get_event_loop()
 
 def keep_awake():
     """Keep the Render service alive by pinging it periodically"""
-    render_url = "https://x-stream-backend-yqsc.onrender.com"
+    render_url = "https://x-stream-backend.onrender.com"
     while True:
         try:
             response = requests.get(render_url, timeout=30)
